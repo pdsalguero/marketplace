@@ -1,0 +1,12 @@
+<CORSConfiguration>
+  <CORSRule>
+    <AllowedOrigin>http://localhost:5173</AllowedOrigin>
+    <AllowedOrigin>http://127.0.0.1:5173</AllowedOrigin>
+    <AllowedOrigin>https://tudominio.com</AllowedOrigin>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedMethod>POST</AllowedMethod>
+    <AllowedMethod>DELETE</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+  </CORSRule>
+</CORSConfiguration>
