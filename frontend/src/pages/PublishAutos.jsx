@@ -15,10 +15,7 @@ export default function CreateAd({ defaultCategory }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const token = localStorage.getItem("token");
-    if (!token) {
-      alert("Debes iniciar sesión para crear un anuncio");
-      return;
-    }
+    if (!token) return alert("Debes iniciar sesión para crear un anuncio");
 
     try {
       const res = await fetch(`${API_URL}/ads`, {
@@ -31,9 +28,9 @@ export default function CreateAd({ defaultCategory }) {
           title,
           description,
           price: Number(price),
-          imageKey: imageKeys[0] || null, // compatibilidad con principal
-          imageKeys,                       // múltiples imágenes
-          category,                        // enum: AUTOS, INMUEBLES, ...
+          imageKey: imageKeys[0] || null,
+          imageKeys,
+          category, // ⬅️ importante
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -41,7 +38,7 @@ export default function CreateAd({ defaultCategory }) {
       navigate("/ads");
     } catch (err) {
       console.error("❌ Error en CreateAd:", err);
-      alert(err.message || "No se pudo crear el anuncio");
+      alert(err.message);
     }
   };
 
@@ -55,7 +52,7 @@ export default function CreateAd({ defaultCategory }) {
           <select
             className="w-full border p-2 rounded"
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e)=>setCategory(e.target.value)}
             disabled={!!defaultCategory}
           >
             <option value="AUTOS">Autos</option>
@@ -70,42 +67,17 @@ export default function CreateAd({ defaultCategory }) {
           </select>
         </div>
 
-        <input
-          type="text"
-          placeholder="Título"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full border p-2 rounded"
-          required
-        />
-        <textarea
-          placeholder="Descripción"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          className="w-full border p-2 rounded"
-          required
-        />
-        <input
-          type="number"
-          placeholder="Precio"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          className="w-full border p-2 rounded"
-          required
-        />
+        <input className="w-full border p-2 rounded" placeholder="Título" value={title}
+          onChange={(e) => setTitle(e.target.value)} required />
+        <textarea className="w-full border p-2 rounded" placeholder="Descripción" value={description}
+          onChange={(e) => setDescription(e.target.value)} required />
+        <input type="number" className="w-full border p-2 rounded" placeholder="Precio" value={price}
+          onChange={(e) => setPrice(e.target.value)} required />
 
-        {/* Uploader múltiple (drag&drop + progreso) */}
-        <MultiImageUploader
-          token={localStorage.getItem("token") || undefined}
-          maxFiles={8}
-          maxSizeMB={10}
-          onChange={setImageKeys}
-        />
+        <MultiImageUploader token={localStorage.getItem("token") || undefined}
+          maxFiles={8} maxSizeMB={10} onChange={setImageKeys} />
 
-        <button
-          type="submit"
-          className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-        >
+        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
           Publicar
         </button>
       </form>

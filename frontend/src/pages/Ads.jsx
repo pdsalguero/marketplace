@@ -1,45 +1,44 @@
-import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import AdCard from "../components/AdCard";
 
+const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
 
-const API_URL = import.meta.env.VITE_API_URL;
-
-function Ads() {
+export default function Ads() {
   const [ads, setAds] = useState([]);
-  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/ads`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Error al cargar anuncios");
-        return res.json();
-      })
-      .then((data) => setAds(data))
-      .catch((err) => setError(err.message));
+    let alive = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`${API_URL}/ads`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        if (alive) setAds(list);
+      } catch (e) {
+        if (alive) setErr(e.message || "Error cargando anuncios");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
   }, []);
 
-  if (error) return <p className="text-red-500">❌ {error}</p>;
+  if (loading) return <div className="p-4">Cargando…</div>;
+  if (err) return <div className="p-4 text-red-600">Error: {err}</div>;
 
   return (
-    <div className="p-6">
-      <h2 className="text-2xl font-bold mb-4">Anuncios</h2>
+    <div className="max-w-6xl mx-auto p-4">
       {ads.length === 0 ? (
-        <p className="text-gray-500">No hay anuncios todavía.</p>
+        <div className="text-gray-500">No hay anuncios.</div>
       ) : (
-        <ul className="space-y-4">
-      {ads.map((ad) => (
-        <div key={ad.id} className="border p-4 rounded-md shadow-md">
-          <Link to={`/ads/${ad.id}`} className="text-xl font-bold text-blue-600">
-            {ad.title}
-          </Link>
-          <p>{ad.description}</p>
-          <p className="font-semibold">${ad.price}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          {ads.map(ad => <AdCard key={ad.id} ad={ad} />)}
         </div>
-      ))}
-        </ul>
       )}
     </div>
   );
 }
-
-export default Ads;

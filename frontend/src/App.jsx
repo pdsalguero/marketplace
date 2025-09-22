@@ -10,7 +10,8 @@ import AdDetail from "./pages/AdDetail";
 import EditAd from "./pages/EditAd";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { ToastContainer } from "react-toastify";
-
+import PublishChooseCategory from "./pages/PublishChooseCategory";
+import PublishAutos from "./pages/PublishAutos";
 
 function App() {
   return (
@@ -50,6 +51,8 @@ function App() {
         {/* Auth */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/publish" element={<PublishChooseCategory />} />
+        <Route path="/publish/autos" element={<PublishAutos />} />
       </Routes>
     </>
   );
