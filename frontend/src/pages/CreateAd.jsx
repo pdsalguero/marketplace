@@ -1,60 +1,23 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import MultiImageUploader from "../components/MultiImageUploader";
 
-const API_URL = "http://localhost:4001/api";
+const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
 
 export default function CreateAd() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
-  const [file, setFile] = useState(null);
+  const [imageKeys, setImageKeys] = useState([]); // ⬅️ ahora múltiples
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     const token = localStorage.getItem("token");
-    if (!token) {
-      alert("Debes iniciar sesión para crear un anuncio");
-      return;
-    }
+    if (!token) return alert("Debes iniciar sesión para crear un anuncio");
 
     try {
-      let imageKey = null;
-
-      // 1️⃣ Si hay archivo, pedimos presigned URL al backend
-      if (file) {
-        console.log("🔹 Subiendo archivo:", file.name);
-
-        const presignedRes = await fetch(
-          `${API_URL}/ads/presigned-url?fileName=${encodeURIComponent(file.name)}&fileType=${file.type}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        if (!presignedRes.ok) {
-          throw new Error("Error obteniendo presigned URL");
-        }
-
-        const { uploadURL, key } = await presignedRes.json();
-       
-
-        // 2️⃣ Subimos el archivo a MinIO usando la URL firmada
-        const uploadRes = await fetch(uploadURL, {
-          method: "PUT",
-          headers: { "Content-Type": file.type },
-          body: file,
-        });
-
-        imageKey = key;
-        
-        if (!uploadRes.ok) {
-          throw new Error("Error al subir la imagen a MinIO");
-        }
-
-        console.log("✅ Imagen subida a MinIO:", key);
-      }
-
-      // 3️⃣ Creamos el anuncio en el backend
+      // Enviar imageKeys (y imageKey[0] por compatibilidad)
       const res = await fetch(`${API_URL}/ads`, {
         method: "POST",
         headers: {
@@ -64,25 +27,22 @@ export default function CreateAd() {
         body: JSON.stringify({
           title,
           description,
-          price,
-          imageKey, // 👈 guardamos referencia a la imagen
+          price: Number(price),
+          imageKey: imageKeys[0] || null, // compat
+          imageKeys,                       // nuevo
         }),
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || "Error creando anuncio");
-      }
-
-      const ad = await res.json();
-      console.log("✅ Anuncio creado:", ad);
-
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
       navigate("/ads");
     } catch (err) {
       console.error("❌ Error en CreateAd:", err);
       alert(err.message);
     }
   };
+
+  const token = localStorage.getItem("token") || undefined;
 
   return (
     <div className="max-w-lg mx-auto mt-10 bg-white p-6 rounded shadow">
@@ -111,16 +71,16 @@ export default function CreateAd() {
           className="w-full border p-2 rounded"
           required
         />
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setFile(e.target.files[0])}
-          className="w-full"
+
+        {/* ⬇️ Módulo de subida múltiple */}
+        <MultiImageUploader
+          token={token}
+          maxFiles={8}
+          maxSizeMB={10}
+          onChange={(keys) => setImageKeys(keys)}
         />
-        <button
-          type="submit"
-          className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-        >
+
+        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
           Crear anuncio
         </button>
       </form>

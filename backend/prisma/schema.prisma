@@ -20,8 +20,12 @@ model Ad {
   title       String
   description String
   price       Float
+  imageKey    String?
+  imageKeys   Json?
   userId      Int
   user        User     @relation(fields: [userId], references: [id])
-  imageKey    String?  // 👈 nueva columna opcional
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
+
+

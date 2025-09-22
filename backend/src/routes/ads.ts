@@ -10,8 +10,7 @@ const prisma = new PrismaClient();
 
 // ⚡ Configuración MinIO / S3
 const s3 = new S3Client({
- // endpoint: process.env.S3_ENDPOINT, // ej: http://localhost:9000
-  endpoint: "http://localhost:9001",
+  endpoint: process.env.S3_ENDPOINT, // ej: http://localhost:9000  (accesible desde el backend)
   region: process.env.S3_REGION || "us-east-1",
   forcePathStyle: true, // 👈 necesario para MinIO
   credentials: {
@@ -21,17 +20,46 @@ const s3 = new S3Client({
 });
 
 // ===============================
-// Crear anuncio protegido
+// Crear anuncio (protegido)
 // ===============================
 router.post("/", authenticate, async (req: AuthRequest, res) => {
-  const { title, description, price, imageKey } = req.body;
+  const { title, description, price, imageKey, imageKeys } = req.body as {
+    title: string;
+    description: string;
+    price: number | string;
+    imageKey?: string | null;
+    imageKeys?: unknown;
+  };
   const userId = req.user!.id;
 
   try {
+    // Normaliza el array de keys (máx 12 strings)
+    const keys: string[] = Array.isArray(imageKeys)
+      ? (imageKeys as unknown[]).filter((s) => typeof s === "string").slice(0, 12) as string[]
+      : [];
+
+    // imageKey principal: usa el recibido o toma el primero del array
+    const primaryKey: string | null =
+      typeof imageKey === "string" && imageKey.length
+        ? imageKey
+        : keys.length > 0
+        ? keys[0]
+        : null;
+
     const ad = await prisma.ad.create({
-      data: { title, description, price: parseFloat(price), userId, imageKey },
+      data: {
+        title,
+        description,
+        price: typeof price === "string" ? parseFloat(price) : Number(price),
+        userId,
+        imageKey: primaryKey,
+        // ⚠️ Requiere que tengas 'imageKeys' como JSON en Prisma (ver schema más abajo)
+        imageKeys: keys,
+      },
+      include: { user: true },
     });
-    res.json(ad);
+
+    res.status(201).json(ad);
   } catch (err) {
     console.error("Error Prisma:", err);
     res.status(400).json({ error: "Error al crear anuncio PRISMA" });
@@ -47,21 +75,24 @@ router.get("/", async (_req, res) => {
 });
 
 // ===============================
-// Obtener presigned URL (MinIO)
+// Obtener presigned URL (MinIO) - single
+// (si usas el batch en /files/presigned-put-batch, puedes mantener igual este endpoint)
 // ===============================
 router.get("/presigned-url", authenticate, async (req: AuthRequest, res) => {
   try {
-    const { fileName, fileType } = req.query;
+    const { fileName, fileType } = req.query as { fileName?: string; fileType?: string };
 
     if (!fileName || !fileType) {
       return res.status(400).json({ error: "Parámetros inválidos" });
     }
 
-    const key = `uploads/${Date.now()}_${fileName}`;
+    const safeName = encodeURIComponent(fileName);
+    const key = `uploads/${Date.now()}_${safeName}`;
+
     const command = new PutObjectCommand({
       Bucket: process.env.S3_BUCKET!,
       Key: key,
-      ContentType: fileType as string,
+      ContentType: fileType,
     });
 
     const uploadURL = await getSignedUrl(s3, command, { expiresIn: 60 });
@@ -77,15 +108,8 @@ router.get("/presigned-url", authenticate, async (req: AuthRequest, res) => {
 // ===============================
 router.get("/:id", async (req, res) => {
   try {
-
-    console.log("Params recibidos:", req.params);
-
-    const id = parseInt(req.params.id, 10);
-
-    console.log("ID parseado:", id);
-
-
-    if (isNaN(id)) {
+    const id = Number.parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) {
       return res.status(400).json({ error: "ID inválido" });
     }
 
@@ -98,6 +122,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ error: "Anuncio no encontrado" });
     }
 
+    // ad.imageKeys saldrá en la respuesta si existe en el modelo Prisma
     res.json(ad);
   } catch (err) {
     console.error("Error al buscar anuncio:", err);
@@ -110,7 +135,13 @@ router.get("/:id", async (req, res) => {
 // ===============================
 router.put("/:id", authenticate, async (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { title, description, price } = req.body;
+  const { title, description, price, imageKey, imageKeys } = req.body as {
+    title?: string;
+    description?: string;
+    price?: number | string;
+    imageKey?: string | null;
+    imageKeys?: unknown;
+  };
 
   try {
     const ad = await prisma.ad.findUnique({ where: { id: Number(id) } });
@@ -118,9 +149,34 @@ router.put("/:id", authenticate, async (req: AuthRequest, res) => {
     if (ad.userId !== req.user?.id)
       return res.status(403).json({ error: "No autorizado" });
 
+    // Normaliza opcionalmente imageKeys si llega
+    let keys: string[] | undefined;
+    if (typeof imageKeys !== "undefined") {
+      keys = Array.isArray(imageKeys)
+        ? (imageKeys as unknown[]).filter((s) => typeof s === "string").slice(0, 12) as string[]
+        : [];
+    }
+
+    // Determina imageKey principal si llega o si viene un array nuevo
+    let primaryKey: string | null | undefined = undefined;
+    if (typeof imageKey !== "undefined") {
+      primaryKey = imageKey ?? null;
+    } else if (keys && keys.length) {
+      primaryKey = keys[0];
+    }
+
     const updated = await prisma.ad.update({
       where: { id: Number(id) },
-      data: { title, description, price: parseFloat(price) },
+      data: {
+        ...(typeof title !== "undefined" ? { title } : {}),
+        ...(typeof description !== "undefined" ? { description } : {}),
+        ...(typeof price !== "undefined"
+          ? { price: typeof price === "string" ? parseFloat(price) : Number(price) }
+          : {}),
+        ...(typeof primaryKey !== "undefined" ? { imageKey: primaryKey } : {}),
+        ...(typeof keys !== "undefined" ? { imageKeys: keys } : {}),
+      },
+      include: { user: true },
     });
 
     res.json(updated);
@@ -149,7 +205,5 @@ router.delete("/:id", authenticate, async (req: AuthRequest, res) => {
     res.status(500).json({ error: "Error al eliminar anuncio" });
   }
 });
-
-
 
 export default router;
