@@ -12,8 +12,11 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev && prisma generate",
     "migrate:deploy": "prisma migrate deploy && prisma generate",
-    "seed": "ts-node prisma/seed.ts",
-    "seed:taxonomy": "node prisma/seed.cjs"
+    "prisma:seed": "tsx prisma/seed-min.js"
+   
+  },
+  "prisma": {
+    "seed": "npm run prisma:seed"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",
@@ -34,6 +37,7 @@
     "prisma": "^6.16.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
 }

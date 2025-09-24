@@ -1,27 +1,24 @@
-import { Router } from "express";
+// src/routes/categories.ts
+import { Router } from 'express';
+import prisma from '../prisma';
 
-const router = Router();
+const r = Router();
 
-/**
- * Catálogo base de categorías estilo Yapo.
- * code: enum Category del schema Prisma (AUTOS, INMUEBLES, ...)
- * slug: para URLs legibles si quieres usarlas en el futuro
- * icon: solo decorativo para el frontend
- */
-export const CATEGORIES = [
-  { slug: "autos",       label: "Autos",        code: "AUTOS",       icon: "🚗" },
-  { slug: "inmuebles",   label: "Inmuebles",    code: "INMUEBLES",   icon: "🏠" },
-  { slug: "electronica", label: "Electrónica",  code: "ELECTRONICA", icon: "📱" },
-  { slug: "hogar",       label: "Hogar",        code: "HOGAR",       icon: "🛋️" },
-  { slug: "empleo",      label: "Empleo",       code: "EMPLEO",      icon: "💼" },
-  { slug: "servicios",   label: "Servicios",    code: "SERVICIOS",   icon: "🧰" },
-  { slug: "moda",        label: "Moda",         code: "MODA",        icon: "👗" },
-  { slug: "mascotas",    label: "Mascotas",     code: "MASCOTAS",    icon: "🐾" },
-  { slug: "otros",       label: "Otros",        code: "OTROS",       icon: "📦" },
-];
+r.get('/categories', async (_req, res, next) => {
+  try {
+    const nodes = await prisma.categoryNode.findMany({
+      select: { id: true, key: true, name: true, parentId: true, order: true, active: true },
+      orderBy: [{ parentId: 'asc' }, { order: 'asc' }, { id: 'asc' }],
+    });
 
-router.get("/categories", (_req, res) => {
-  res.json({ items: CATEGORIES });
+    const byId = new Map(nodes.map(n => [n.id, { ...n, children: [] as any[] }]));
+    const roots: any[] = [];
+    for (const n of byId.values()) {
+      if (n.parentId) byId.get(n.parentId)?.children.push(n);
+      else roots.push(n);
+    }
+    res.json(roots);
+  } catch (e) { next(e); }
 });
 
-export default router;
+export default r;
