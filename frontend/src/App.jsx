@@ -6,11 +6,20 @@ import Home from "./pages/Home";
 import Ads from "./pages/Ads";
 import AdDetail from "./pages/AdDetail";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 
 // Publicación
 import Publish from "./pages/Publish";
 import AutosWizard from "./pages/publish/autos/AutosWizard";
 import GenericPublish from "./pages/publish/GenericPublish";
+
+// Nuevas páginas del wizard de autos
+import CategorySelect from "./pages/publish/autos/CategorySelect";
+import LocationStep from "./pages/publish/autos/LocationStep";
+import DetailsStep from "./pages/publish/autos/DetailsStep";
+import PhotosStep from "./pages/publish/autos/PhotosStep";
+import PriceStep from "./pages/publish/autos/PriceStep";
+import ReviewStep from "./pages/publish/autos/ReviewStep";
 
 function Layout({ children }) {
   return (
@@ -32,12 +41,21 @@ export default function App() {
 
         {/* Auth */}
         <Route path="/login" element={<Login />} />
-        {/* (opcional) <Route path="/register" element={<Register />} /> */}
+        <Route path="/register" element={<Register />} />
 
-        {/* Publicación */}
+        {/* Publicación (genérica) */}
         <Route path="/publish" element={<Publish />} />
-        <Route path="/publish/autos" element={<AutosWizard />} />
         <Route path="/publish/:slug" element={<GenericPublish />} />
+
+        {/* Publicación → Autos (wizard) */}
+        <Route path="/publish/autos" element={<AutosWizard />}>
+          <Route index element={<CategorySelect />} />
+          <Route path="ubicacion" element={<LocationStep />} />
+          <Route path="detalles" element={<DetailsStep />} />
+          <Route path="fotos" element={<PhotosStep />} />
+          <Route path="precio" element={<PriceStep />} />
+          <Route path="revision" element={<ReviewStep />} />
+        </Route>
 
         {/* 404 */}
         <Route path="*" element={<div className="p-6">Página no encontrada</div>} />

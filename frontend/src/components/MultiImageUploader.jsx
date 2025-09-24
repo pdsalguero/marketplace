@@ -5,165 +5,145 @@ const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
 
 export default function MultiImageUploader({
   token,
-  initialKeys = [],
   maxFiles = 8,
   maxSizeMB = 10,
   onChange, // (keys: string[]) => void
 }) {
-  const [items, setItems] = useState(() =>
-    initialKeys.map((k) => ({ id: k, key: k, status: "done", progress: 100, preview: null }))
-  );
-  const uploadingRef = useRef(false);
+  const [files, setFiles] = useState([]); // {file, key, status, progress}
+  const lastKeysRef = useRef([]);
 
-  // Notifica claves al padre
+  // Notifica cambios solo si el array de keys realmente cambia
   useEffect(() => {
-    const keys = items.filter((x) => x.status === "done").map((x) => x.key);
-    onChange?.(keys);
-  }, [items, onChange]);
+    const keys = files.map((f) => f.key).filter(Boolean);
+    const prev = lastKeysRef.current;
+    const changed =
+      keys.length !== prev.length || keys.some((k, i) => k !== prev[i]);
+    if (changed) {
+      lastKeysRef.current = keys;
+      if (typeof onChange === "function") onChange(keys);
+    }
+  }, [files, onChange]);
 
   const onDrop = useCallback(
-    async (acceptedFiles) => {
-      if (uploadingRef.current) return;
-      const remain = Math.max(0, maxFiles - items.length);
-      const files = acceptedFiles.slice(0, remain);
+    async (accepted) => {
+      if (!accepted?.length) return;
+      const tooMany = files.length + accepted.length > maxFiles;
+      const take = tooMany ? maxFiles - files.length : accepted.length;
+      const toAdd = accepted.slice(0, take);
 
-      // 1) agrega a la UI como pendientes
-      const pending = files.map((f) => ({
-        id: crypto.randomUUID(),
-        file: f,
-        status: "queued", // queued -> uploading -> done/error
-        progress: 0,
-        preview: URL.createObjectURL(f),
-      }));
-      setItems((prev) => [...prev, ...pending]);
-
-      // 2) pide presign en batch
-      try {
-        uploadingRef.current = true;
-        const body = {
-          files: pending.map((p) => ({ fileName: p.file.name, fileType: p.file.type })),
-        };
-        const res = await fetch(`${API_URL}/files/presigned-put-batch`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const { items: presigned } = await res.json();
-
-        // 3) sube cada archivo con XHR para progreso
-        await Promise.all(
-          pending.map(async (p, idx) => {
-            const match = presigned[idx];
-            if (!match) throw new Error("presign response mismatch");
-            await uploadWithProgress(p.file, match.uploadURL, (prog) => {
-              setItems((prev) =>
-                prev.map((x) => (x.id === p.id ? { ...x, status: "uploading", progress: prog } : x))
-              );
-            });
-            // listo
-            setItems((prev) =>
-              prev.map((x) =>
-                x.id === p.id ? { ...x, status: "done", progress: 100, key: match.key } : x
-              )
-            );
-          })
-        );
-      } catch (err) {
-        console.error("upload error", err);
-        setItems((prev) =>
-          prev.map((x) => (x.status === "queued" || x.status === "uploading" ? { ...x, status: "error" } : x))
-        );
-      } finally {
-        uploadingRef.current = false;
+      // 1) pedir presigned batch
+      const payload = {
+        files: toAdd.map((f) => ({ fileName: f.name, fileType: f.type || "application/octet-stream" })),
+      };
+      const res = await fetch(`${API_URL}/files/presigned-put-batch`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        console.error("presigned batch error", await res.text());
+        return;
       }
+      const data = await res.json();
+      const items = data.items || [];
+
+      // 2) subir cada archivo
+      const withMeta = toAdd.map((f, i) => ({
+        file: f,
+        key: items[i]?.key || null,
+        status: "pending",
+        progress: 0,
+      }));
+
+      setFiles((curr) => [...curr, ...withMeta]);
+
+      await Promise.all(
+        withMeta.map(async (entry, i) => {
+          if (!items[i]?.uploadURL || !entry.key) {
+            entry.status = "error";
+            setFiles((curr) => [...curr]);
+            return;
+          }
+          try {
+            entry.status = "uploading";
+            setFiles((curr) => [...curr]);
+
+            const r = await fetch(items[i].uploadURL, {
+              method: "PUT",
+              body: entry.file, // no fijar Content-Type manualmente
+            });
+            if (!r.ok) throw new Error(await r.text());
+
+            entry.status = "done";
+            entry.progress = 100;
+            setFiles((curr) => [...curr]);
+          } catch (e) {
+            console.error("upload error", e);
+            entry.status = "error";
+            setFiles((curr) => [...curr]);
+          }
+        })
+      );
     },
-    [items.length, maxFiles, token]
+    [API_URL, token, files.length, maxFiles]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { "image/*": [] },
     multiple: true,
-    maxFiles,
     maxSize: maxSizeMB * 1024 * 1024,
+    accept: { "image/*": [] },
   });
 
-  const removeItem = (id) => {
-    setItems((prev) => prev.filter((x) => x.id !== id));
+  const removeAt = (idx) => {
+    setFiles((curr) => curr.filter((_, i) => i !== idx));
   };
 
-  const cards = useMemo(
+  const thumbs = useMemo(
     () =>
-      items.map((it) => (
-        <div key={it.id} className="relative w-28 h-28 rounded overflow-hidden border bg-white">
-          {it.preview ? (
-            <img src={it.preview} alt="" className="w-full h-full object-cover" />
-          ) : it.key ? (
-            <div className="w-full h-full text-xs p-2 break-words">{it.key.split("/").slice(-1)}</div>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">pendiente</div>
-          )}
-
-          {it.status !== "done" && (
-            <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-200">
-              <div className="h-full" style={{ width: `${it.progress}%` }} />
-            </div>
-          )}
+      files.map((f, i) => (
+        <div key={i} className="relative border rounded overflow-hidden">
+          <div className="w-32 h-24 bg-gray-100 grid place-items-center">
+            {f.key ? (
+              <span className="text-[10px] p-1 text-center break-all">{f.file.name}</span>
+            ) : (
+              <span className="text-xs text-gray-500">pendiente</span>
+            )}
+          </div>
           <button
             type="button"
-            className="absolute top-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded"
-            onClick={() => removeItem(it.id)}
+            onClick={() => removeAt(i)}
+            className="absolute top-1 right-1 bg-white/80 border rounded px-1 text-xs"
           >
-            ✕
+            ×
           </button>
-          {it.status === "error" && (
-            <div className="absolute inset-0 bg-red-500/20 flex items-center justify-center text-xs text-red-700">
-              error
+          {f.status === "uploading" && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-200">
+              <div className="h-1" style={{ width: `${f.progress}%` }} />
             </div>
           )}
         </div>
       )),
-    [items]
+    [files]
   );
 
   return (
     <div className="space-y-2">
-      <label className="block text-sm font-medium">Imágenes (máx. {maxFiles})</label>
-
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded p-4 text-center cursor-pointer ${
-          isDragActive ? "border-blue-600 bg-blue-50" : "border-gray-300"
+          isDragActive ? "bg-blue-50" : "bg-white"
         }`}
       >
         <input {...getInputProps()} />
-        <p className="text-sm text-gray-600">
-          Arrastra imágenes aquí o <span className="text-blue-600 underline">haz clic para seleccionar</span>
+        <p className="text-sm">
+          Arrastra y suelta imágenes aquí o haz click para seleccionar (máx. {maxFiles})
         </p>
-        <p className="text-xs text-gray-400 mt-1">PNG, JPG, WEBP • máx {maxSizeMB}MB c/u</p>
       </div>
-
-      {items.length > 0 && <div className="flex flex-wrap gap-2">{cards}</div>}
+      <div className="flex flex-wrap gap-2">{thumbs}</div>
     </div>
   );
-}
-
-function uploadWithProgress(file, url, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded * 100) / e.total));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(true);
-      else reject(new Error(`PUT ${xhr.status}`));
-    };
-    xhr.onerror = () => reject(new Error("network error"));
-    xhr.send(file);
-  });
 }

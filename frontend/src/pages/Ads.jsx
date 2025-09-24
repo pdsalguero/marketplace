@@ -1,44 +1,48 @@
-import { useEffect, useState } from "react";
-import AdCard from "../components/AdCard";
-
-const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
+import React, { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import Container from "../components/ui/Container";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 
 export default function Ads() {
-  const [ads, setAds] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+  const [params] = useSearchParams();
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        setLoading(true);
-        const res = await fetch(`${API_URL}/ads`);
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
-        if (alive) setAds(list);
-      } catch (e) {
-        if (alive) setErr(e.message || "Error cargando anuncios");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  if (loading) return <div className="p-4">Cargando…</div>;
-  if (err) return <div className="p-4 text-red-600">Error: {err}</div>;
+    const qs = params.toString();
+    fetch("/api/ads?" + qs)
+      .then((r) => r.json())
+      .then((res) => {
+        setItems(res.items || []);
+        setTotal(res.total || 0);
+      })
+      .catch(() => {});
+  }, [params]);
 
   return (
-    <div className="max-w-6xl mx-auto p-4">
-      {ads.length === 0 ? (
-        <div className="text-gray-500">No hay anuncios.</div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {ads.map(ad => <AdCard key={ad.id} ad={ad} />)}
-        </div>
-      )}
-    </div>
+    <Container className="py-8 space-y-6">
+      <div className="flex items-end justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Anuncios</h1>
+        <div className="text-sm text-gray-600">{total} resultados</div>
+      </div>
+
+      {/* Grid de cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+        {items.map((ad) => (
+          <Card key={ad.id} className="overflow-hidden">
+            <Link to={`/ads/${ad.id}`}>
+              <div className="aspect-[4/3] bg-gray-100" />
+            </Link>
+            <CardHeader className="pt-3">
+              <CardTitle className="text-base line-clamp-2">{ad.title}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-gray-900 font-semibold">${ad.price}</div>
+              <div className="text-xs text-gray-500 mt-1">{new Date(ad.createdAt).toLocaleDateString()}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </Container>
   );
 }

@@ -1,81 +1,67 @@
-import { useState } from "react";
-import { useNavigate, useLocation, Link } from "react-router-dom";
+import React, { useState } from "react";
+import Container from "../components/ui/Container";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/Card";
+import { useNavigate } from "react-router-dom";
 
 const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
 
 export default function Login() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [err, setErr] = useState(null);
+  const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const from = (location.state && location.state.from) || "/";
+  const onChange = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const submit = async (e) => {
     e.preventDefault();
-    setErr(null);
-    setLoading(true);
+    setError("");
     try {
+      setLoading(true);
       const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(form),
       });
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || "Credenciales inválidas");
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
       }
-      const data = await res.json();
-      if (!data?.token) throw new Error("Respuesta inválida del servidor");
-
-      localStorage.setItem("token", data.token);
-      navigate(from, { replace: true });
-    } catch (e) {
-      setErr(e.message || "No se pudo iniciar sesión");
+      const data = await res.json(); // { token, user }
+      if (data?.token) localStorage.setItem("token", data.token);
+      navigate("/publish");
+    } catch (err) {
+      setError(typeof err?.message === "string" ? err.message : "No se pudo iniciar sesión.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-md mx-auto p-6 bg-white rounded shadow mt-10">
-      <h1 className="text-2xl font-bold mb-4">Iniciar sesión</h1>
-      <form onSubmit={submit} className="space-y-4">
-        <div>
-          <label className="block text-sm mb-1">Email</label>
-          <input
-            type="email"
-            className="w-full border rounded p-2"
-            value={email}
-            onChange={(e)=>setEmail(e.target.value)}
-            required
-            autoFocus
-          />
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Contraseña</label>
-          <input
-            type="password"
-            className="w-full border rounded p-2"
-            value={password}
-            onChange={(e)=>setPassword(e.target.value)}
-            required
-          />
-        </div>
-        {err && <div className="text-red-600 text-sm">{err}</div>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? "Ingresando..." : "Ingresar"}
-        </button>
-      </form>
-      <div className="text-sm text-gray-600 mt-4">
-        ¿No tienes cuenta? <Link to="/register" className="text-blue-600 hover:underline">Regístrate</Link>
+    <Container className="py-12">
+      <div className="max-w-md mx-auto">
+        <Card>
+          <CardHeader>
+            <CardTitle>Iniciar sesión</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={submit} className="space-y-4">
+              {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input className="w-full border rounded-xl px-3 py-2 text-sm" type="email" value={form.email} onChange={onChange("email")} autoComplete="email" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña</label>
+                <input className="w-full border rounded-xl px-3 py-2 text-sm" type="password" value={form.password} onChange={onChange("password")} autoComplete="current-password" required />
+              </div>
+              <button type="submit" disabled={loading} className={`w-full px-4 py-2 rounded-lg text-white ${loading ? "bg-gray-400" : "bg-gray-900 hover:bg-black"}`}>
+                {loading ? "Ingresando…" : "Entrar"}
+              </button>
+            </form>
+          </CardContent>
+        </Card>
       </div>
-    </div>
+    </Container>
   );
 }

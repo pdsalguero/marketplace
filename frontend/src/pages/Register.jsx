@@ -1,89 +1,140 @@
 import React, { useState } from "react";
+import Container from "../components/ui/Container";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/Card";
 import { useNavigate } from "react-router-dom";
 
 export default function Register() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const navigate = useNavigate();
+  const [form, setForm] = useState({ email: "", password: "", name: "" });
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
+  // errores por campo + general
+  const [errors, setErrors] = useState({ email: "", form: "" });
+
+  const onChange = (k) => (e) => {
+    setForm({ ...form, [k]: e.target.value });
+    // limpia error del campo al tipear
+    if (k === "email" && errors.email) setErrors((p) => ({ ...p, email: "" }));
+    if (errors.form) setErrors((p) => ({ ...p, form: "" }));
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
-    setError("");
+    setErrors({ email: "", form: "" });
+
+    if (!form.email || !form.password) {
+      setErrors((p) => ({ ...p, form: "Email y contraseña son obligatorios." }));
+      return;
+    }
 
     try {
+      setLoading(true);
       const res = await fetch("http://localhost:4001/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({
+          email: form.email,
+          password: form.password,
+          name: form.name || undefined,
+        }),
       });
 
-      const data = await res.json();
+      if (!res.ok) {
+        // intenta parsear body para detectar el tipo de error
+        let msg = "";
+        try {
+          const data = await res.json();
+          msg = data?.message || data?.error || "";
+        } catch {
+          msg = await res.text();
+        }
 
-      if (res.ok) {
-        console.log("Registro exitoso ✅", data);
-        alert("Usuario registrado. Ahora puedes iniciar sesión.");
-        navigate("/login");
-      } else {
-        setError(data.error || "Error al registrar usuario");
+        // caso típico: email existente
+        const lower = (msg || "").toLowerCase();
+        if (lower.includes("email") && (lower.includes("exists") || lower.includes("registrado"))) {
+          setErrors({ email: "Este email ya está registrado.", form: "" });
+        } else {
+          setErrors({ email: "", form: msg || `Error ${res.status}` });
+        }
+        return;
       }
+
+      const data = await res.json(); // { token, user }
+      if (data?.token) localStorage.setItem("token", data.token);
+      navigate("/publish");
     } catch (err) {
-      console.error("Error en registro:", err);
-      setError("No se pudo conectar al servidor");
+      setErrors({ email: "", form: "No se pudo registrar. Intenta nuevamente." });
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100">
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white p-6 rounded-lg shadow-md w-96"
-      >
-        <h2 className="text-2xl font-bold mb-4">Registrarse</h2>
+    <Container className="py-12">
+      <div className="max-w-md mx-auto">
+        <Card>
+          <CardHeader>
+            <CardTitle>Crear cuenta</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={submit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+                <input
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  value={form.name}
+                  onChange={onChange("name")}
+                  autoComplete="name"
+                />
+              </div>
 
-        {error && <p className="text-red-500 mb-3">{error}</p>}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  className={`w-full border rounded-xl px-3 py-2 text-sm ${errors.email ? "border-red-400" : ""}`}
+                  type="email"
+                  value={form.email}
+                  onChange={onChange("email")}
+                  autoComplete="email"
+                  required
+                />
+                {errors.email && (
+                  <p className="mt-1 text-xs text-red-600">{errors.email}</p>
+                )}
+              </div>
 
-        <div className="mb-4">
-          <label className="block mb-1">Nombre</label>
-          <input
-            type="text"
-            className="w-full border px-3 py-2 rounded"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña</label>
+                <input
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  type="password"
+                  value={form.password}
+                  onChange={onChange("password")}
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
 
-        <div className="mb-4">
-          <label className="block mb-1">Email</label>
-          <input
-            type="email"
-            className="w-full border px-3 py-2 rounded"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
+              {/* error general debajo del formulario */}
+              {errors.form && (
+                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {errors.form}
+                </div>
+              )}
 
-        <div className="mb-4">
-          <label className="block mb-1">Contraseña</label>
-          <input
-            type="password"
-            className="w-full border px-3 py-2 rounded"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-
-        <button
-          type="submit"
-          className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700"
-        >
-          Registrarse
-        </button>
-      </form>
-    </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className={`w-full px-4 py-2 rounded-lg text-white ${
+                  loading ? "bg-gray-400" : "bg-gray-900 hover:bg-black"
+                }`}
+              >
+                {loading ? "Registrando…" : "Registrarme"}
+              </button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </Container>
   );
 }

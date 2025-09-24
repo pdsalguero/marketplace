@@ -1,98 +1,73 @@
-import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import ImageGallery from "../components/ImageGallery";
-
-const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
+import React, { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import Container from "../components/ui/Container";
+import { Card, CardContent } from "../components/ui/Card";
 
 export default function AdDetail() {
   const { id } = useParams();
-  const navigate = useNavigate();
-
   const [ad, setAd] = useState(null);
-  const [loading, setLoading] = useState(true);
 
-  // carga anuncio
   useEffect(() => {
-    let alive = true;
-    async function loadAd() {
-      try {
-        const res = await fetch(`${API_URL}/ads/${id}`);
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        if (!alive) return;
-        setAd(data);
-      } catch (err) {
-        console.error("Error cargando anuncio:", err);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    }
-    loadAd();
-    return () => {
-      alive = false;
-    };
+    fetch(`/api/ads/${id}`).then((r) => r.json()).then(setAd).catch(() => {});
   }, [id]);
-
-  if (loading) {
-    return (
-      <div className="max-w-3xl mx-auto mt-10 bg-white p-6 rounded shadow">
-        Cargando...
-      </div>
-    );
-  }
 
   if (!ad) {
     return (
-      <div className="max-w-3xl mx-auto mt-10 bg-white p-6 rounded shadow">
-        <p>No se encontró el anuncio.</p>
-        <button
-          className="mt-3 bg-gray-200 px-3 py-2 rounded"
-          onClick={() => navigate(-1)}
-        >
-          Volver
-        </button>
-      </div>
+      <Container className="py-10">
+        <div className="text-center text-gray-500">Cargando…</div>
+      </Container>
     );
   }
 
-  // Usa todas las keys si existen; si no, cae a la key única
-  const allKeys = Array.isArray(ad.imageKeys) && ad.imageKeys.length
-    ? ad.imageKeys
-    : (ad.imageKey ? [ad.imageKey] : []);
-
-  const token = localStorage.getItem("token") || undefined;
-
   return (
-    <div className="max-w-3xl mx-auto mt-10 bg-white p-6 rounded shadow space-y-4">
-      <h2 className="text-2xl font-bold">{ad.title}</h2>
+    <Container className="py-8 space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Galería */}
+        <Card className="lg:col-span-7 overflow-hidden">
+          <div className="aspect-[4/3] bg-gray-100" />
+          {/* thumbs si querés */}
+        </Card>
 
-      {/* Galería de imágenes */}
-      <ImageGallery keys={allKeys} token={token} />
-
-      <p className="">{ad.description}</p>
-
-      <p className="text-green-600 font-semibold">
-        ${" "}{typeof ad.price === "number" ? ad.price : Number(ad.price || 0)}
-      </p>
-
-      <p className="text-sm text-gray-500">
-        Publicado por: {ad?.user?.email || ad?.owner?.email || "Desconocido"}
-      </p>
-
-      <div className="flex gap-3 pt-2">
-        <button
-          className="bg-gray-200 px-3 py-2 rounded"
-          onClick={() => navigate(-1)}
-        >
-          Volver
-        </button>
-        <button
-          className="bg-blue-600 text-white px-3 py-2 rounded hover:bg-blue-700"
-          onClick={() => navigate(`/ads/${id}/edit`)}
-        >
-          Editar
-        </button>
+        {/* Datos */}
+        <div className="lg:col-span-5 space-y-4">
+          <Card>
+            <CardContent className="space-y-2">
+              <h1 className="text-2xl font-semibold">{ad.title}</h1>
+              <div className="text-2xl font-bold">${ad.price}</div>
+              <div className="text-sm text-gray-500">{ad.location || "Sin ubicación"}</div>
+              <div className="text-sm text-gray-500">{new Date(ad.createdAt).toLocaleString()}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="grid grid-cols-2 gap-3 text-sm">
+              <Info k="Categoría" v={ad.category} />
+              {ad.subcategory && <Info k="Subcategoría" v={ad.subcategory} />}
+              {ad.brand && <Info k="Marca" v={ad.brand} />}
+              {ad.model && <Info k="Modelo" v={ad.model} />}
+              {ad.year && <Info k="Año" v={ad.year} />}
+              {ad.mileage && <Info k="KMs" v={ad.mileage} />}
+              {ad.transmission && <Info k="Transmisión" v={ad.transmission} />}
+              {ad.fuel && <Info k="Combustible" v={ad.fuel} />}
+            </CardContent>
+          </Card>
+        </div>
       </div>
+
+      <Card>
+        <CardContent>
+          <h2 className="text-lg font-semibold mb-2">Descripción</h2>
+          <p className="text-gray-700 whitespace-pre-wrap">{ad.description}</p>
+        </CardContent>
+      </Card>
+    </Container>
+  );
+}
+
+function Info({ k, v }) {
+  return (
+    <div className="flex justify-between gap-2">
+      <span className="text-gray-500">{k}</span>
+      <span className="font-medium">{v}</span>
     </div>
   );
 }
