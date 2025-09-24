@@ -7,14 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  ads       Ad[]
-  name      String?   // 👈 nuevo campo opcional
-}
-
 enum Category {
   AUTOS
   INMUEBLES
@@ -39,15 +31,51 @@ enum Fuel {
   HYBRID
 }
 
+model User {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  password String
+  name     String?
+
+  ads Ad[]
+}
+
+model CategoryNode {
+  id       Int            @id @default(autoincrement())
+  key      String         @unique
+  name     String
+  parentId Int?
+  parent   CategoryNode?  @relation("CategoryChildren", fields: [parentId], references: [id])
+  children CategoryNode[] @relation("CategoryChildren")
+  order    Int            @default(0)
+  active   Boolean        @default(true)
+
+  adsCategory    Ad[] @relation("AdCategory")
+  adsSubcategory Ad[] @relation("AdSubcategory")
+
+  @@index([parentId])
+  @@index([key])
+}
+
 model Ad {
-  id           Int        @id @default(autoincrement())
-  title        String
-  description  String
-  price        Float
-  imageKey     String?
-  imageKeys    Json?
-  category     Category    @default(OTROS)
-  // ---- Atributos AUTOS (opcionales) ----
+  id          Int     @id @default(autoincrement())
+  title       String
+  description String
+  price       Float
+  imageKey    String?
+  imageKeys   Json?
+
+  // Retrocompat
+  category    Category @default(OTROS)
+  subcategory String?  @db.VarChar(64)
+
+  // Taxonomía por IDs (opcionales)
+  categoryId     Int?
+  categoryRef    CategoryNode? @relation("AdCategory", fields: [categoryId], references: [id])
+  subcategoryId  Int?
+  subcategoryRef CategoryNode? @relation("AdSubcategory", fields: [subcategoryId], references: [id])
+
+  // Autos (opcionales)
   brand        String?
   model        String?
   year         Int?
@@ -56,12 +84,12 @@ model Ad {
   fuel         Fuel?
   location     String?
 
-  userId     Int
-  user       User        @relation(fields: [userId], references: [id])
+  userId Int
+  user   User @relation(fields: [userId], references: [id])
 
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([subcategoryId])
 }
-
-
-

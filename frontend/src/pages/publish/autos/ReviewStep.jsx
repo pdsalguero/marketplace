@@ -22,11 +22,21 @@ export default function ReviewStep() {
       location: draft?.location ? `${draft.location.province}, ${draft.location.city}` : undefined,
     };
 
-    const res = await fetch("/api/ads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) return alert("No se pudo publicar el aviso");
-    const ad = await res.json();
+    const res = await fetch("/api/ads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      alert("No se pudo publicar el aviso");
+      return;
+    }
+
+    // Limpiamos el borrador y redirigimos a la página de elegir categoría
     sessionStorage.removeItem("publishDraft");
-    navigate(`/ads/${ad.id}`);
+    // Opcional: podés pasar un flag para mostrar un banner de éxito en /publish
+    navigate("/publish?published=1");
   };
 
   const Row = ({ k, v }) => (
@@ -58,10 +68,10 @@ export default function ReviewStep() {
       </div>
 
       <div className="flex justify-between md:justify-end gap-3">
-        <button className="px-4 py-2 rounded-lg border border-gray-300" onClick={() => navigate(-1)}>
+        <button type="button" className="px-4 py-2 rounded-lg border border-gray-300" onClick={() => navigate(-1)}>
           Atrás
         </button>
-        <button className="px-4 py-2 rounded-lg text-white bg-gray-900 hover:bg-black" onClick={submit}>
+        <button type="button" className="px-4 py-2 rounded-lg text-white bg-gray-900 hover:bg-black" onClick={submit}>
           Publicar
         </button>
       </div>

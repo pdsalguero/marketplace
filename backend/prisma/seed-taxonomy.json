@@ -1,0 +1,16 @@
+{ "categories": [
+  { "key": "VEHICULOS", "name": "Vehículos", "order": 1,
+    "children": [
+      { "key": "AUTOS_USADOS", "name": "Autos Usados", "order": 1 },
+      { "key": "AUTOS_NUEVOS", "name": "Autos Nuevos", "order": 2 },
+      { "key": "MOTOS", "name": "Motos", "order": 3 },
+      { "key": "CAMIONES_BUSES", "name": "Camiones y Buses", "order": 4 }
+    ]
+  },
+  { "key": "INMUEBLES", "name": "Inmuebles", "order": 2,
+    "children": [
+      { "key": "DEPARTAMENTOS", "name": "Departamentos", "order": 1 },
+      { "key": "CASAS", "name": "Casas", "order": 2 }
+    ]
+  }
+]}

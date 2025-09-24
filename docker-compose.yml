@@ -28,6 +28,8 @@ services:
       S3_SECRET_KEY: admin123
     ports:
       - "4000:4000"
+    volumes:
+      - C:\Users\Admin\Documents\marketplace_data:/app/data      
 
   backend-dev:
     build:
