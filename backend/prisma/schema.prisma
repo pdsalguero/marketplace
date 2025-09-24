@@ -27,18 +27,41 @@ enum Category {
   OTROS
 }
 
-model Ad {
-  id          Int       @id @default(autoincrement())
-  title       String
-  description String
-  price       Float
-  imageKey    String?
-  imageKeys   Json?
-  category    Category  @default(OTROS)  // ⬅️ nuevo
-  userId      Int
-  user        User      @relation(fields: [userId], references: [id])
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+enum Transmission {
+  MANUAL
+  AUTOMATIC
 }
+
+enum Fuel {
+  GASOLINE
+  DIESEL
+  EV
+  HYBRID
+}
+
+model Ad {
+  id           Int        @id @default(autoincrement())
+  title        String
+  description  String
+  price        Float
+  imageKey     String?
+  imageKeys    Json?
+  category     Category    @default(OTROS)
+  // ---- Atributos AUTOS (opcionales) ----
+  brand        String?
+  model        String?
+  year         Int?
+  mileage      Int?
+  transmission Transmission?
+  fuel         Fuel?
+  location     String?
+
+  userId     Int
+  user       User        @relation(fields: [userId], references: [id])
+
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
 
 

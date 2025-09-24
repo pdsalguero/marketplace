@@ -8,6 +8,8 @@ import userRoutes from "./routes/users";
 import presignRoutes from "./routes/presign"; // si lo estás usando
 import filesRoutes from "./routes/files";     // GET y PUT batch de imágenes
 import categoriesRoutes from "./routes/categories";
+import autosRoutes from "./routes/autos";
+
 
 dotenv.config();
 const app = express();
@@ -21,6 +23,8 @@ app.use("/api", filesRoutes);     // /files/presigned-get, /files/presigned-put-
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/ads", adsRoutes);
+app.use("/api", autosRoutes);
+
 
 // (Opcional) mantener si usas el single presign en /api/ads/presigned-url
 app.use("/api", presignRoutes);

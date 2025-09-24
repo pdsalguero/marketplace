@@ -23,7 +23,6 @@ export default function Publish() {
   }, []);
 
   const go = (cat) => {
-    // ruta específica para AUTOS (wizard); resto usa publicador genérico
     if (cat.code === "AUTOS") navigate("/publish/autos");
     else navigate(`/publish/${cat.slug}`);
   };
@@ -41,7 +40,7 @@ export default function Publish() {
               onClick={() => go(c)}
               className="border rounded-lg p-4 bg-white hover:shadow transition flex items-center gap-3 text-left"
             >
-              <div className="text-2xl">{c.icon || "📦"}</div>
+              <div className="text-2xl" aria-hidden>{c.icon || "📦"}</div>
               <div>
                 <div className="font-semibold">{c.label}</div>
                 <div className="text-xs text-gray-500 capitalize">{c.slug}</div>
