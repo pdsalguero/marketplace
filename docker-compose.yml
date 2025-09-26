@@ -18,6 +18,10 @@ services:
     depends_on:
       - postgres
       - minio
+    command: >
+              sh -c "npx prisma migrate deploy &&
+                    node prisma/seed-min.js &&
+                    node dist/index.js"
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/marketplace
       JWT_SECRET: supersecret

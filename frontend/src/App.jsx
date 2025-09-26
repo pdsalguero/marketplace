@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import Header from "./components/Header";
 
 // Páginas
@@ -13,7 +13,7 @@ import Publish from "./pages/Publish";
 import AutosWizard from "./pages/publish/autos/AutosWizard";
 import GenericPublish from "./pages/publish/GenericPublish";
 
-// Nuevas páginas del wizard de autos
+// Wizard de autos
 import CategorySelect from "./pages/publish/autos/CategorySelect";
 import LocationStep from "./pages/publish/autos/LocationStep";
 import DetailsStep from "./pages/publish/autos/DetailsStep";
@@ -30,6 +30,12 @@ function Layout({ children }) {
   );
 }
 
+// Alias /ad/:id → /ads/:id
+function AdToAdsRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/ads/${id}`} replace />;
+}
+
 export default function App() {
   return (
     <Layout>
@@ -38,6 +44,8 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/ads" element={<Ads />} />
         <Route path="/ads/:id" element={<AdDetail />} />
+        {/* Alias para rutas antiguas */}
+        <Route path="/ad/:id" element={<AdToAdsRedirect />} />
 
         {/* Auth */}
         <Route path="/login" element={<Login />} />
@@ -58,7 +66,9 @@ export default function App() {
         </Route>
 
         {/* 404 */}
-        <Route path="*" element={<div className="p-6">Página no encontrada</div>} />
+        <Route path="*"
+          element={<div className="p-6">Página no encontrada</div>}
+        />
       </Routes>
     </Layout>
   );
