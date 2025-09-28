@@ -1,16 +1,9 @@
-import { useContext } from "react";
+import React from "react";
 import { Navigate } from "react-router-dom";
-import { AuthContext } from "../context/AuthContext";
+import { useAuth } from "../context/AuthContext";
 
-function ProtectedRoute({ children }) {
-  const { user } = useContext(AuthContext);
-
-  if (!user) {
-    // 👈 si no hay sesión, redirige a login
-    return <Navigate to="/login" replace />;
-  }
-
-  return children;
+export default function ProtectedRoute({ children }) {
+  const { ready, token } = useAuth();
+  if (!ready) return null;               // o spinner
+  return token ? children : <Navigate to="/login" replace />;
 }
-
-export default ProtectedRoute;

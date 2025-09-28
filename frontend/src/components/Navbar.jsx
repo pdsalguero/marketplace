@@ -7,22 +7,17 @@ function Navbar() {
   const { ready, user, logout } = useContext(AuthContext);
   const [isOpen, setIsOpen] = useState(false);
 
-  // Logs
-  useEffect(() => { console.log("[Navbar] mount"); return () => console.log("[Navbar] unmount"); }, []);
-  useEffect(() => { console.log("[Navbar] ready:", ready); }, [ready]);
-  useEffect(() => {
+  useEffect(() => { /* logs opcionales
+    console.log("[Navbar] ready:", ready);
     console.log("[Navbar] user:", user);
-    if (user) {
-      console.log("[Navbar] displayName:", user?.profile?.displayName);
-      console.log("[Navbar] email:", user?.email);
-    }
-  }, [user]);
+  */ }, [ready, user]);
 
   const handleLogout = () => {
-    console.log("[Navbar] logout clicked");
     logout();
     navigate("/login");
   };
+
+  const displayName = user?.profile?.displayName || user?.email;
 
   return (
     <nav className="bg-gray-800 text-white">
@@ -52,17 +47,19 @@ function Navbar() {
               </>
             ) : (
               <>
-                <span className="text-sm text-gray-300">
-                  {user?.profile?.displayName || user?.email}
-                </span>
-                <button onClick={handleLogout} className="bg-red-500 px-3 py-1 rounded hover:bg-red-600">Logout</button>
+                <Link to="/account" className="text-sm text-gray-300 hover:text-white underline-offset-4 hover:underline">
+                  {displayName}
+                </Link>
+                <button onClick={handleLogout} className="bg-red-500 px-3 py-1 rounded hover:bg-red-600">
+                  Logout
+                </button>
               </>
             )}
           </div>
 
           <div className="md:hidden">
             <button
-              onClick={() => { const next = !isOpen; console.log("[Navbar] toggle mobile ->", next); setIsOpen(next); }}
+              onClick={() => setIsOpen(!isOpen)}
               className="text-gray-300 hover:text-white focus:outline-none"
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,6 +81,7 @@ function Navbar() {
             <>
               <Link to="/ads/new" className="block hover:text-gray-300">Nuevo anuncio</Link>
               <Link to="/profile" className="block hover:text-gray-300">Mis anuncios</Link>
+              <Link to="/account" className="block hover:text-gray-300">Mi cuenta ({displayName})</Link>
             </>
           )}
           {!ready ? (

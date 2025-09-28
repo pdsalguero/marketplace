@@ -101,7 +101,7 @@ export default function AdsList() {
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Hero compacto */}
       <div className="mb-6">
-        <h1 className="text-2xl md:text-3xl font-bold">Explorar anuncios</h1>
+        <h1 className="text-2xl md:text-3xl font-bold">¿Qué estás buscando?</h1>
         <p className="text-gray-500">Compra y vende vehículos y más, fácil y rápido.</p>
       </div>
 
