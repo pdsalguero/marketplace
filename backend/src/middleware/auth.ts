@@ -1,34 +1,38 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { PrismaClient } from "@prisma/client";
 
-export interface AuthRequest extends Request {
-  user?: { id: number };
+const prisma = new PrismaClient();
+
+export interface AuthUser {
+  id: string;          // UUID
+  email: string;
+  isAdmin?: boolean;
 }
 
+export interface AuthRequest extends Request {
+  user?: AuthUser;
+}
 
-export function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
-  
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) return res.status(401).json({ error: "Token requerido" });
-
-  const token = authHeader.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Token inválido" });
-
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const secret = process.env.JWT_SECRET || "secret123";
-    const payload = jwt.verify(token, secret) as any; // { userId: number }
+    const hdr = req.headers.authorization || "";
+    const token = hdr.replace(/^Bearer\s+/i, "");
+    if (!token) return res.status(401).json({ error: "No token" });
 
-    if (!payload?.userId) {
-      console.error("El token no tiene userId:", payload);
-      return res.status(403).json({ error: "Token inválido" });
-    }
+    const payload: any = jwt.verify(token, process.env.JWT_SECRET || "devsecret");
+    const id = String(payload.id ?? payload.userId ?? "");
+    if (!id) return res.status(401).json({ error: "Invalid token" });
 
-    console.log("✅ Token decodificado:", payload);
-    
-    req.user = { id: payload.userId }; // 👈 Mapear userId → id
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, isAdmin: true },
+    });
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    req.user = user;
     next();
-  } catch (err) {
-    console.error("Error JWT:", err);
-    return res.status(403).json({ error: "Token inválido o expirado" });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 }

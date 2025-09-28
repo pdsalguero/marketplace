@@ -12,11 +12,11 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev && prisma generate",
     "migrate:deploy": "prisma migrate deploy && prisma generate",
-    "prisma:seed": "tsx prisma/seed-min.js"
-   
+    "build:ciudades": "tsx scripts/build_ciudades_from_georef.ts",
+    "seed": "prisma db seed"
   },
   "prisma": {
-    "seed": "npm run prisma:seed"
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",
@@ -37,7 +37,7 @@
     "prisma": "^6.16.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "tsx": "^4.20.5",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.2"
   }
 }

@@ -29,13 +29,15 @@ export default function Register() {
 
     try {
       setLoading(true);
-      const res = await fetch("http://localhost:4001/api/auth/register", {
+      const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+      //const res = await fetch("http://localhost:4001/api/auth/register", {
+      const res = await fetch(`${base}/api/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: form.email,
           password: form.password,
-          name: form.name || undefined,
+          displayName: form.name || undefined, // el backend espera "displayName"
         }),
       });
 

@@ -1,64 +1,89 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { authenticate, AuthRequest } from "../middleware/auth";
 
-
-const router = Router();
 const prisma = new PrismaClient();
+const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || "changeme";
+function signToken(user: { id: string; email: string; isAdmin: boolean }) {
+  return jwt.sign(
+    { id: user.id, email: user.email, isAdmin: user.isAdmin },
+    process.env.JWT_SECRET || "devsecret",
+    { expiresIn: "7d" }
+  );
+}
 
-router.post("/register", async (req, res) => {
-  const { name, email, password } = req.body;
+// POST /api/auth/signup
+router.post("/signup", async (req: Request, res: Response) => {
   try {
-    const hashed = await bcrypt.hash(password, 10);
+    const { email, password, displayName } = req.body as {
+      email?: string;
+      password?: string;
+      displayName?: string;
+    };
+    if (!email || !password) {
+      return res.status(400).json({ error: "email y password son requeridos" });
+    }
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) return res.status(409).json({ error: "Email ya registrado" });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
     const user = await prisma.user.create({
-      data: { name, email, password: hashed },
+      data: {
+        email,
+        passwordHash,
+        profile: displayName ? { create: { displayName } } : undefined,
+      },
+      select: {
+        id: true,
+        email: true,
+        isAdmin: true,
+        profile: { select: { displayName: true } },
+      },
     });
-    res.json(user);
+
+    const token = signToken({ id: user.id, email: user.email, isAdmin: user.isAdmin });
+    return res.status(201).json({ token, user });
   } catch (err) {
-    res.status(400).json({ error: "Email already exists" });
+    console.error("signup error:", err);
+    return res.status(500).json({ error: "Error creando usuario" });
   }
 });
 
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
-
-  const valid = await bcrypt.compare(password, user.password);
-  if (!valid) return res.status(401).json({ error: "Invalid credentials" });
-
-  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "1h" });
-  res.json({ token });
-});
-
-router.get("/profile", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "Missing token" });
-
+// POST /api/auth/login
+router.post("/login", async (req: Request, res: Response) => {
   try {
-    const token = authHeader.split(" ")[1];
-    const decoded: any = jwt.verify(token, JWT_SECRET);
-    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
-    res.json(user);
-  } catch (err) {
-    res.status(401).json({ error: "Invalid token" });
-  }
-});
-
-// Endpoint /auth/me
-router.get("/me", authenticate, async (req: AuthRequest, res) => {
-  try {
+    const { email, password } = req.body as { email?: string; password?: string };
+    if (!email || !password) {
+      return res.status(400).json({ error: "email y password son requeridos" });
+    }
     const user = await prisma.user.findUnique({
-      where: { id: req.user!.id },
-      select: { id: true, email: true, name: true },
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        isAdmin: true,
+        passwordHash: true,
+        profile: { select: { displayName: true } },
+      },
     });
-    res.json(user);
+    if (!user) return res.status(401).json({ error: "Credenciales inválidas" });
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
+
+    prisma.user
+      .update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
+      .catch(() => {});
+
+    const token = signToken({ id: user.id, email: user.email, isAdmin: user.isAdmin });
+    const { passwordHash, ...safeUser } = user;
+    return res.json({ token, user: safeUser });
   } catch (err) {
-    res.status(500).json({ error: "Error obteniendo usuario" });
+    console.error("login error:", err);
+    return res.status(500).json({ error: "Error en login" });
   }
 });
 

@@ -1,0 +1,96 @@
+[
+  {
+    "name": "Vehículos",
+    "slug": "vehiculos",
+    "children": [
+      {
+        "name": "Autos y Camionetas",
+        "slug": "autos-camionetas",
+        "children": [
+          { "name": "Sedanes", "slug": "sedanes" },
+          { "name": "SUV", "slug": "suv" },
+          { "name": "Pickups", "slug": "pickups" }
+        ]
+      },
+      {
+        "name": "Motos",
+        "slug": "motos",
+        "children": [
+          { "name": "Scooters", "slug": "scooters" },
+          { "name": "Street", "slug": "street" },
+          { "name": "Enduro", "slug": "enduro" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Inmuebles",
+    "slug": "inmuebles",
+    "children": [
+      {
+        "name": "Departamentos",
+        "slug": "departamentos",
+        "children": [
+          { "name": "1 Ambiente", "slug": "monoambiente" },
+          { "name": "2 Ambientes", "slug": "2-ambientes" },
+          { "name": "3+ Ambientes", "slug": "3-o-mas-ambientes" }
+        ]
+      },
+      {
+        "name": "Casas",
+        "slug": "casas",
+        "children": [
+          { "name": "PH", "slug": "ph" },
+          { "name": "Country/Barrio Privado", "slug": "barrios-privados" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Electrónica",
+    "slug": "electronica",
+    "children": [
+      {
+        "name": "Celulares",
+        "slug": "celulares",
+        "children": [
+          { "name": "Smartphones", "slug": "smartphones" },
+          { "name": "Accesorios", "slug": "accesorios" }
+        ]
+      },
+      {
+        "name": "Computación",
+        "slug": "computacion",
+        "children": [
+          { "name": "Notebooks", "slug": "notebooks" },
+          { "name": "PCs de Escritorio", "slug": "pc-escritorio" },
+          { "name": "Periféricos", "slug": "perifericos" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Hogar y Muebles",
+    "slug": "hogar-muebles",
+    "children": [
+      {
+        "name": "Muebles",
+        "slug": "muebles",
+        "children": [
+          { "name": "Sillas", "slug": "sillas" },
+          { "name": "Mesas", "slug": "mesas" },
+          { "name": "Sofás", "slug": "sofas" }
+        ]
+      },
+      {
+        "name": "Electrodomésticos",
+        "slug": "electrodomesticos",
+        "children": [
+          { "name": "Heladeras", "slug": "heladeras" },
+          { "name": "Lavarropas", "slug": "lavarropas" },
+          { "name": "Cocinas", "slug": "cocinas" }
+        ]
+      }
+    ]
+  }
+]

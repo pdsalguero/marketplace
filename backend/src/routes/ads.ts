@@ -1,271 +1,367 @@
-import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+// backend/src/routes/ads.ts
+import { Router, Request, Response } from "express";
+import {
+  PrismaClient,
+  Prisma,
+  ListingStatus,
+  Condition,
+} from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const router = Router();
 const prisma = new PrismaClient();
+const router = Router();
 
+// ---------- S3 presign client (opcional) ----------
 const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT,
   region: process.env.S3_REGION || "us-east-1",
   forcePathStyle: true,
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY!,
-    secretAccessKey: process.env.S3_SECRET_KEY!,
-  },
+  credentials: process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY
+    ? {
+        accessKeyId: process.env.S3_ACCESS_KEY!,
+        secretAccessKey: process.env.S3_SECRET_KEY!,
+      }
+    : undefined,
 });
 
-// ---------- Helpers ----------
-const num = (v: any) => (v === undefined || v === null || v === "" ? undefined : Number(v));
-const str = (v: any) => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
-const upper = (v: any) => (typeof v === "string" && v.trim() ? v.trim().toUpperCase() : undefined);
+// ---------- helpers ----------
+const asNum = (v: any) =>
+  v === undefined || v === null || v === "" ? undefined : Number(v);
+const asStr = (v: any) =>
+  typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
 
-// ---------- CREATE ----------
-router.post("/", authenticate, async (req: AuthRequest, res) => {
-  const body = req.body as any;
-  const userId = req.user!.id;
+function toDecimal2(n?: number) {
+  if (typeof n !== "number" || Number.isNaN(n)) return undefined;
+  return new Prisma.Decimal(n.toFixed(2));
+}
 
-  // Normaliza imágenes
-  const keys: string[] = Array.isArray(body.imageKeys)
-    ? body.imageKeys.filter((s: any) => typeof s === "string").slice(0, 12)
-    : [];
-  const primaryKey = str(body.imageKey) ?? (keys[0] ?? null);
+async function resolveCategoryIdFromSlug(slug?: string | null) {
+  if (!slug) return undefined;
+  const c = await prisma.category.findUnique({ where: { slug } });
+  return c?.id;
+}
+async function resolveLocationIdFromSlug(slug?: string | null) {
+  if (!slug) return undefined;
+  const l = await prisma.location.findUnique({ where: { slug } });
+  return l?.id;
+}
 
-  // Normaliza campos básicos
-  const data: any = {
-    title: String(body.title ?? "").trim(),
-    description: String(body.description ?? "").trim(),
-    price: Number(body.price),
-    userId,
-    imageKey: primaryKey,
-    imageKeys: keys.length ? keys : undefined,
-  };
-
-  // Categoría y Subcategoría
-  const cat = upper(body.category);
-  if (cat) data.category = cat;
-
-  const subcat = upper(body.subcategory); // NUEVO
-  if (subcat) data.subcategory = subcat;  // NUEVO
-
-  // Atributos AUTOS (agrega solo si existen en tu schema)
-  const brand = str(body.brand);
-  if (brand) data.brand = brand;
-  const model = str(body.model);
-  if (model) data.model = model;
-  const year = num(body.year);
-  if (typeof year === "number" && !Number.isNaN(year)) data.year = year;
-  const mileage = num(body.mileage);
-  if (typeof mileage === "number" && !Number.isNaN(mileage)) data.mileage = mileage;
-  const transmission = upper(body.transmission);
-  if (transmission) data.transmission = transmission;
-  const fuel = upper(body.fuel);
-  if (fuel) data.fuel = fuel;
-  const location = str(body.location);
-  if (location) data.location = location;
-
+// ==================================================
+// CREATE  (POST /api/ads)
+// ==================================================
+router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const ad = await prisma.ad.create({ data, include: { user: true } });
-    return res.status(201).json(ad);
-  } catch (e1: any) {
-    // Fallback para DBs sin columnas nuevas
-    console.warn("create fallback (DB sin columnas nuevas):", String(e1?.message || e1));
-    const minimal: any = {
-      title: data.title,
-      description: data.description,
-      price: data.price,
-      userId,
-      imageKey: data.imageKey ?? null,
-    };
-    try {
-      const ad = await prisma.ad.create({ data: minimal, include: { user: true } });
-      return res.status(201).json(ad);
-    } catch (e2: any) {
-      console.error("Error Prisma (create):", e2);
-      return res.status(400).json({ error: "Error al crear anuncio PRISMA" });
+    // Aseguramos string (UUID) aunque el middleware envíe number
+    const sellerId = String(req.user!.id);
+
+    const {
+      title,
+      description,
+      price, // number
+      currency, // string, default ARS
+      condition, // "new" | "used"
+      categorySlug, // padre
+      subcategorySlug, // hijo (si viene, tiene prioridad)
+      provinceSlug,
+      citySlug,
+      imageUrls, // string[]
+    } = req.body as any;
+
+    const categoryId =
+      (await resolveCategoryIdFromSlug(subcategorySlug)) ||
+      (await resolveCategoryIdFromSlug(categorySlug));
+    if (!categoryId) {
+      return res.status(400).json({ error: "Categoría no encontrada" });
     }
+
+    const provinceId = await resolveLocationIdFromSlug(provinceSlug);
+    const cityId = await resolveLocationIdFromSlug(citySlug);
+
+    const created = await prisma.listing.create({
+      data: {
+        sellerId,
+        categoryId,
+        title: String(title ?? "").trim(),
+        description: asStr(description),
+        priceAmount: toDecimal2(asNum(price)) ?? new Prisma.Decimal(0),
+        currency: asStr(currency) ?? "ARS",
+        condition:
+          (condition === "new" || condition === "used"
+            ? condition
+            : "used") as Condition,
+        quantity: 1,
+        status: ListingStatus.pending,
+        provinceId,
+        cityId,
+        media:
+          Array.isArray(imageUrls) && imageUrls.length
+            ? {
+                create: imageUrls.slice(0, 12).map((url: string, i: number) => ({
+                  url,
+                  position: i,
+                })),
+              }
+            : undefined,
+      },
+      include: {
+        media: true,
+        category: { select: { id: true, name: true, slug: true, parentId: true } },
+      },
+    });
+
+    return res.status(201).json(created);
+  } catch (err) {
+    console.error("Create listing error:", err);
+    return res.status(500).json({ error: "Error al crear el aviso" });
   }
 });
 
-// ---------- LIST ----------
-router.get("/", async (req, res) => {
+// ==================================================
+// LIST  (GET /api/ads)
+// ==================================================
+router.get("/", async (req: Request, res: Response) => {
   try {
-    const q = str(req.query.q);
-    const minPrice = num(req.query.minPrice);
-    const maxPrice = num(req.query.maxPrice);
-    const category = upper(req.query.category);
-    const subcategory = upper(req.query.subcategory); // NUEVO
-
-    const brand = str(req.query.brand);
-    const model = str(req.query.model);
-    const yearMin = num(req.query.yearMin);
-    const yearMax = num(req.query.yearMax);
-    const mileageMax = num(req.query.mileageMax);
-    const transmission = upper(req.query.transmission);
-    const fuel = upper(req.query.fuel);
-    const location = str(req.query.location);
+    const q = asStr(req.query.q);
+    const minPrice = asNum(req.query.minPrice);
+    const maxPrice = asNum(req.query.maxPrice);
+    const categorySlug = asStr(req.query.category);
+    const subcategorySlug = asStr(req.query.subcategory);
+    const provinceSlug = asStr(req.query.province);
+    const citySlug = asStr(req.query.city);
+    const status = asStr(req.query.status) as ListingStatus | undefined; // optional filter
 
     const page = Math.max(1, Number(req.query.page || 1));
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize || 12)));
 
-    const sort = String(req.query.sort || "created_desc");
-    let orderBy: any = { createdAt: "desc" };
-    if (sort === "price_asc") orderBy = { price: "asc" };
-    else if (sort === "price_desc") orderBy = { price: "desc" };
+    const sort = String(req.query.sort || "published_desc");
+    let orderBy: Prisma.ListingOrderByWithRelationInput = { publishedAt: "desc" };
+    if (sort === "price_asc") orderBy = { priceAmount: "asc" };
+    else if (sort === "price_desc") orderBy = { priceAmount: "desc" };
+    else if (sort === "created_desc") orderBy = { createdAt: "desc" };
 
-    const where: any = { AND: [] as any[] };
-    if (q) where.AND.push({ OR: [{ title: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }] });
-    if (typeof minPrice === "number") where.AND.push({ price: { gte: minPrice } });
-    if (typeof maxPrice === "number") where.AND.push({ price: { lte: maxPrice } });
-    if (category) where.AND.push({ category });
-    if (subcategory) where.AND.push({ subcategory }); // NUEVO
+    const whereAND: Prisma.ListingWhereInput[] = [];
+    // Por defecto, mostramos solo activos si no se pasó status
+    if (!status) whereAND.push({ status: ListingStatus.active });
 
-    if (category === "AUTOS") {
-      if (brand) where.AND.push({ brand });
-      if (model) where.AND.push({ model });
-      if (typeof yearMin === "number") where.AND.push({ year: { gte: yearMin } });
-      if (typeof yearMax === "number") where.AND.push({ year: { lte: yearMax } });
-      if (typeof mileageMax === "number") where.AND.push({ mileage: { lte: mileageMax } });
-      if (transmission) where.AND.push({ transmission });
-      if (fuel) where.AND.push({ fuel });
-      if (location) where.AND.push({ location: { contains: location, mode: "insensitive" } });
+    if (status) whereAND.push({ status });
+
+    if (q) {
+      whereAND.push({
+        OR: [
+          { title: { contains: q, mode: "insensitive" } },
+          { description: { contains: q, mode: "insensitive" } },
+        ],
+      });
     }
-    if (where.AND.length === 0) delete where.AND;
+    if (typeof minPrice === "number")
+      whereAND.push({ priceAmount: { gte: toDecimal2(minPrice) } });
+    if (typeof maxPrice === "number")
+      whereAND.push({ priceAmount: { lte: toDecimal2(maxPrice) } });
 
-    try {
-      const [total, items] = await Promise.all([
-        prisma.ad.count({ where }),
-        prisma.ad.findMany({
-          where, orderBy, skip: (page - 1) * pageSize, take: pageSize, include: { user: true },
-        }),
-      ]);
-      return res.json({ items, total, page, pageSize });
-    } catch (e1: any) {
-      console.warn("list fallback:", String(e1?.message || e1));
-      // fallback sin category/createdAt/subcategory
-      const where2: any = { AND: [] as any[] };
-      if (q) where2.AND.push({ OR: [{ title: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }] });
-      if (typeof minPrice === "number") where2.AND.push({ price: { gte: minPrice } });
-      if (typeof maxPrice === "number") where2.AND.push({ price: { lte: maxPrice } });
-      if (where2.AND.length === 0) delete where2.AND;
+    let filterCategoryId: string | undefined;
+    if (subcategorySlug)
+      filterCategoryId = await resolveCategoryIdFromSlug(subcategorySlug);
+    else if (categorySlug)
+      filterCategoryId = await resolveCategoryIdFromSlug(categorySlug);
+    if (filterCategoryId) whereAND.push({ categoryId: filterCategoryId });
 
-      const [total2, items2] = await Promise.all([
-        prisma.ad.count({ where: where2 }),
-        prisma.ad.findMany({
-          where: where2, orderBy: { id: "desc" }, skip: (page - 1) * pageSize, take: pageSize,
-          select: { id: true, title: true, description: true, price: true, imageKey: true, createdAt: true, user: { select: { id: true, email: true } } },
-        }),
-      ]);
-      return res.json({ items: items2, total: total2, page, pageSize });
-    }
+    const provinceId = await resolveLocationIdFromSlug(provinceSlug || undefined);
+    if (provinceId) whereAND.push({ provinceId });
+    const cityId = await resolveLocationIdFromSlug(citySlug || undefined);
+    if (cityId) whereAND.push({ cityId });
+
+    const where: Prisma.ListingWhereInput =
+      whereAND.length ? { AND: whereAND } : {};
+
+    const [total, items] = await Promise.all([
+      prisma.listing.count({ where }),
+      prisma.listing.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          media: { orderBy: { position: "asc" } },
+          category: { select: { id: true, name: true, slug: true, parentId: true } },
+          seller: { select: { id: true, email: true } },
+        },
+      }),
+    ]);
+
+    return res.json({ items, total, page, pageSize });
   } catch (err) {
-    console.error("Error listando anuncios:", err);
-    res.status(500).json({ error: "Error listando anuncios" });
+    console.error("List listings error:", err);
+    return res.status(500).json({ error: "Error listando avisos" });
   }
 });
 
-// ---------- STATS ----------
+// ==================================================
+// STATS  (GET /api/ads/stats/basic)
+// ==================================================
 router.get("/stats/basic", async (_req, res) => {
   try {
     const [min, max, total] = await Promise.all([
-      prisma.ad.aggregate({ _min: { price: true } }),
-      prisma.ad.aggregate({ _max: { price: true } }),
-      prisma.ad.count(),
+      prisma.listing.aggregate({
+        _min: { priceAmount: true },
+        where: { status: ListingStatus.active },
+      }),
+      prisma.listing.aggregate({
+        _max: { priceAmount: true },
+        where: { status: ListingStatus.active },
+      }),
+      prisma.listing.count({ where: { status: ListingStatus.active } }),
     ]);
     res.json({
-      minPrice: min._min.price ?? 0,
-      maxPrice: max._max.price ?? 0,
+      minPrice: min._min.priceAmount ?? new Prisma.Decimal(0),
+      maxPrice: max._max.priceAmount ?? new Prisma.Decimal(0),
       total,
     });
   } catch (err) {
-    console.error("Error stats:", err);
+    console.error("Stats error:", err);
     res.status(500).json({ error: "Error obteniendo stats" });
   }
 });
 
-// ---------- PRESIGNED (opcional) ----------
+// ==================================================
+// PRESIGNED (GET /api/ads/presigned-url)
+// ==================================================
 router.get("/presigned-url", authenticate, async (req: AuthRequest, res) => {
   try {
+    if (!process.env.S3_BUCKET) {
+      return res.status(400).json({ error: "S3_BUCKET no configurado" });
+    }
     const { fileName, fileType } = req.query as any;
-    if (!fileName || !fileType) return res.status(400).json({ error: "Parámetros inválidos" });
-    const key = `uploads/${Date.now()}_${encodeURIComponent(fileName)}`;
+    if (!fileName || !fileType)
+      return res.status(400).json({ error: "Parámetros inválidos" });
+    const key = `uploads/${Date.now()}_${encodeURIComponent(String(fileName))}`;
     const command = new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET!, Key: key, ContentType: fileType,
+      Bucket: process.env.S3_BUCKET!,
+      Key: key,
+      ContentType: String(fileType),
     });
     const uploadURL = await getSignedUrl(s3, command, { expiresIn: 60 });
     res.json({ uploadURL, key });
   } catch (err: any) {
-    console.error("❌ Error generando presigned URL:", err);
-    res.status(500).json({ error: err.message || "Error generando presigned URL" });
+    console.error("Presigned error:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Error generando presigned URL" });
   }
 });
 
-// ---------- DETAIL ----------
+// ==================================================
+// DETAIL  (GET /api/ads/:id)
+// ==================================================
 router.get("/:id", async (req, res) => {
   try {
-    const id = Number.parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "ID inválido" });
-    const ad = await prisma.ad.findUnique({ where: { id }, include: { user: true } });
-    if (!ad) return res.status(404).json({ error: "Anuncio no encontrado" });
-    res.json(ad);
+    const id = String(req.params.id); // UUID
+    const listing = await prisma.listing.findUnique({
+      where: { id },
+      include: {
+        media: { orderBy: { position: "asc" } },
+        category: { select: { id: true, name: true, slug: true, parentId: true } },
+        seller: { select: { id: true, email: true } },
+      },
+    });
+    if (!listing) return res.status(404).json({ error: "Aviso no encontrado" });
+    res.json(listing);
   } catch (err) {
-    console.error("Error al buscar anuncio:", err);
-    res.status(500).json({ error: "Error al buscar anuncio" });
+    console.error("Get listing error:", err);
+    res.status(500).json({ error: "Error obteniendo aviso" });
   }
 });
 
-// ---------- UPDATE ----------
+// ==================================================
+// UPDATE  (PUT /api/ads/:id)
+// ==================================================
 router.put("/:id", authenticate, async (req: AuthRequest, res) => {
-  const { id } = req.params;
-  const body = req.body as any;
-
   try {
-    const ad = await prisma.ad.findUnique({ where: { id: Number(id) } });
-    if (!ad) return res.status(404).json({ error: "Anuncio no encontrado" });
-    if (ad.userId !== req.user?.id) return res.status(403).json({ error: "No autorizado" });
+    const id = String(req.params.id);
+    const me = String(req.user!.id);
 
-    const data: any = {};
-    if (body.title !== undefined) data.title = String(body.title).trim();
-    if (body.description !== undefined) data.description = String(body.description).trim();
-    if (body.price !== undefined) data.price = Number(body.price);
-    if (body.imageKey !== undefined) data.imageKey = str(body.imageKey) ?? null;
-    if (Array.isArray(body.imageKeys)) data.imageKeys = body.imageKeys.filter((s: any) => typeof s === "string").slice(0, 12);
-    if (body.category !== undefined) data.category = upper(body.category);
+    const current = await prisma.listing.findUnique({ where: { id } });
+    if (!current) return res.status(404).json({ error: "Aviso no encontrado" });
+    if (current.sellerId !== me) return res.status(403).json({ error: "No autorizado" });
 
-    // NUEVO: subcategory
-    if (body.subcategory !== undefined) data.subcategory = upper(body.subcategory) ?? null;
+    const {
+      title,
+      description,
+      price,
+      currency,
+      condition,
+      categorySlug,
+      subcategorySlug,
+      provinceSlug,
+      citySlug,
+      imageUrls,
+      status, // opcional
+    } = req.body as any;
 
-    // autos
-    if (body.brand !== undefined) data.brand = str(body.brand);
-    if (body.model !== undefined) data.model = str(body.model);
-    if (body.year !== undefined) data.year = num(body.year) ?? null;
-    if (body.mileage !== undefined) data.mileage = num(body.mileage) ?? null;
-    if (body.transmission !== undefined) data.transmission = upper(body.transmission) ?? null;
-    if (body.fuel !== undefined) data.fuel = upper(body.fuel) ?? null;
-    if (body.location !== undefined) data.location = str(body.location) ?? null;
+    const categoryId =
+      (await resolveCategoryIdFromSlug(subcategorySlug)) ||
+      (await resolveCategoryIdFromSlug(categorySlug));
 
-    const updated = await prisma.ad.update({ where: { id: Number(id) }, data, include: { user: true } });
+    const provinceId = await resolveLocationIdFromSlug(provinceSlug);
+    const cityId = await resolveLocationIdFromSlug(citySlug);
+
+    const data: Prisma.ListingUpdateInput = {
+      ...(title !== undefined && { title: String(title).trim() }),
+      ...(description !== undefined && { description: asStr(description) ?? null }),
+      ...(price !== undefined && {
+        priceAmount: toDecimal2(asNum(price)) ?? undefined,
+      }),
+      ...(currency !== undefined && { currency: String(currency || "ARS") }),
+      ...(condition !== undefined &&
+        (condition === "new" || condition === "used") && { condition }),
+      ...(categoryId && { category: { connect: { id: categoryId } } }),
+      ...(provinceSlug !== undefined && { provinceId: provinceId ?? null }),
+      ...(citySlug !== undefined && { cityId: cityId ?? null }),
+      ...(status && { status }),
+    };
+
+    // reemplazo total de media si viene array
+    if (Array.isArray(imageUrls)) {
+      data.media = {
+        deleteMany: { listingId: id },
+        create: imageUrls.slice(0, 12).map((url: string, i: number) => ({
+          url,
+          position: i,
+        })),
+      };
+    }
+
+    const updated = await prisma.listing.update({
+      where: { id },
+      data,
+      include: { media: { orderBy: { position: "asc" } } },
+    });
+
     res.json(updated);
   } catch (err) {
-    console.error("Error al editar anuncio:", err);
-    res.status(500).json({ error: "Error al editar anuncio" });
+    console.error("Update listing error:", err);
+    res.status(500).json({ error: "Error actualizando aviso" });
   }
 });
 
-// ---------- DELETE ----------
+// ==================================================
+// DELETE  (DELETE /api/ads/:id)
+// ==================================================
 router.delete("/:id", authenticate, async (req: AuthRequest, res) => {
-  const { id } = req.params;
   try {
-    const ad = await prisma.ad.findUnique({ where: { id: Number(id) } });
-    if (!ad) return res.status(404).json({ error: "Anuncio no encontrado" });
-    if (ad.userId !== req.user?.id) return res.status(403).json({ error: "No autorizado" });
-    await prisma.ad.delete({ where: { id: Number(id) } });
-    res.json({ message: "Anuncio eliminado" });
+    const id = String(req.params.id);
+    const me = String(req.user!.id);
+
+    const current = await prisma.listing.findUnique({ where: { id } });
+    if (!current) return res.status(404).json({ error: "Aviso no encontrado" });
+    if (current.sellerId !== me) return res.status(403).json({ error: "No autorizado" });
+
+    await prisma.listing.delete({ where: { id } });
+    res.json({ ok: true });
   } catch (err) {
-    console.error("Error al eliminar anuncio:", err);
-    res.status(500).json({ error: "Error al eliminar anuncio" });
+    console.error("Delete listing error:", err);
+    res.status(500).json({ error: "Error eliminando aviso" });
   }
 });
 

@@ -1,12 +1,12 @@
-import React, { useState } from "react";
+import React, { useContext, useState } from "react";
 import Container from "../components/ui/Container";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/Card";
 import { useNavigate } from "react-router-dom";
-
-const API_URL = import.meta.env?.VITE_API_URL ?? "http://localhost:4000/api";
+import { AuthContext } from "../context/AuthContext";
 
 export default function Login() {
   const navigate = useNavigate();
+  const { loginOk } = useContext(AuthContext);
   const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,18 +18,19 @@ export default function Login() {
     setError("");
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/auth/login`, {
+      const res = await fetch(`/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
       if (!res.ok) {
-        const msg = await res.text();
-        throw new Error(msg || `Error ${res.status}`);
+        let msg = `Error ${res.status}`;
+        try { const j = await res.json(); msg = j?.error || j?.message || msg; } catch {}
+        throw new Error(msg);
       }
       const data = await res.json(); // { token, user }
-      if (data?.token) localStorage.setItem("token", data.token);
-      navigate("/publish");
+      if (data?.token) loginOk(data.token, data.user);
+      navigate("/");
     } catch (err) {
       setError(typeof err?.message === "string" ? err.message : "No se pudo iniciar sesión.");
     } finally {
@@ -41,9 +42,7 @@ export default function Login() {
     <Container className="py-12">
       <div className="max-w-md mx-auto">
         <Card>
-          <CardHeader>
-            <CardTitle>Iniciar sesión</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Iniciar sesión</CardTitle></CardHeader>
           <CardContent>
             <form onSubmit={submit} className="space-y-4">
               {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
