@@ -1,89 +1,108 @@
 import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import { authenticate, signToken, AuthRequest } from "../middleware/auth";
 
 const prisma = new PrismaClient();
 const router = Router();
 
-function signToken(user: { id: string; email: string; isAdmin: boolean }) {
-  return jwt.sign(
-    { id: user.id, email: user.email, isAdmin: user.isAdmin },
-    process.env.JWT_SECRET || "devsecret",
-    { expiresIn: "7d" }
-  );
-}
-
-// POST /api/auth/signup
-router.post("/signup", async (req: Request, res: Response) => {
+/**
+ * POST /api/auth/register
+ * body: { email, password, displayName? }
+ */
+router.post("/register", async (req: Request, res: Response) => {
   try {
-    const { email, password, displayName } = req.body as {
-      email?: string;
-      password?: string;
-      displayName?: string;
-    };
-    if (!email || !password) {
-      return res.status(400).json({ error: "email y password son requeridos" });
-    }
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) return res.status(409).json({ error: "Email ya registrado" });
+    const { email, password, displayName } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: "email y password requeridos" });
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const exists = await prisma.user.findUnique({ where: { email } });
+    if (exists) return res.status(409).json({ error: "Email ya registrado" });
 
-    const user = await prisma.user.create({
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const created = await prisma.user.create({
       data: {
         email,
         passwordHash,
-        profile: displayName ? { create: { displayName } } : undefined,
+        profile: displayName ? { create: { displayName } } : { create: { displayName: email.split("@")[0] } },
       },
-      select: {
-        id: true,
-        email: true,
-        isAdmin: true,
-        profile: { select: { displayName: true } },
-      },
+      select: { id: true, email: true, isAdmin: true, profile: { select: { displayName: true, avatarUrl: true } } },
     });
 
-    const token = signToken({ id: user.id, email: user.email, isAdmin: user.isAdmin });
-    return res.status(201).json({ token, user });
-  } catch (err) {
-    console.error("signup error:", err);
-    return res.status(500).json({ error: "Error creando usuario" });
+    const token = signToken({ id: created.id, email: created.email, isAdmin: created.isAdmin });
+    return res.status(201).json({
+      token,
+      user: {
+        id: created.id,
+        email: created.email,
+        isAdmin: created.isAdmin,
+        displayName: created.profile?.displayName || "",
+        avatarUrl: created.profile?.avatarUrl || null,
+      },
+    });
+  } catch (e) {
+    console.error("auth/register error:", e);
+    return res.status(500).json({ error: "Error registrando usuario" });
   }
 });
 
-// POST /api/auth/login
+/**
+ * POST /api/auth/login
+ * body: { email, password }
+ */
 router.post("/login", async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body as { email?: string; password?: string };
-    if (!email || !password) {
-      return res.status(400).json({ error: "email y password son requeridos" });
-    }
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: "email y password requeridos" });
+
     const user = await prisma.user.findUnique({
       where: { email },
-      select: {
-        id: true,
-        email: true,
-        isAdmin: true,
-        passwordHash: true,
-        profile: { select: { displayName: true } },
-      },
+      select: { id: true, email: true, passwordHash: true, isAdmin: true, status: true, profile: { select: { displayName: true, avatarUrl: true } } },
     });
     if (!user) return res.status(401).json({ error: "Credenciales inválidas" });
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    const ok = await bcrypt.compare(String(password), user.passwordHash);
     if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
 
-    prisma.user
-      .update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
-      .catch(() => {});
+    // (opcional) bloquear si status = banned
+    if (String(user.status) === "banned") return res.status(403).json({ error: "Usuario bloqueado" });
 
     const token = signToken({ id: user.id, email: user.email, isAdmin: user.isAdmin });
-    const { passwordHash, ...safeUser } = user;
-    return res.json({ token, user: safeUser });
-  } catch (err) {
-    console.error("login error:", err);
-    return res.status(500).json({ error: "Error en login" });
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        isAdmin: user.isAdmin,
+        displayName: user.profile?.displayName || "",
+        avatarUrl: user.profile?.avatarUrl || null,
+      },
+    });
+  } catch (e) {
+    console.error("auth/login error:", e);
+    return res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+/**
+ * GET /api/auth/me (protegido)
+ */
+router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: String(req.user!.id) },
+      select: { id: true, email: true, isAdmin: true, profile: { select: { displayName: true, avatarUrl: true } } },
+    });
+    if (!u) return res.status(404).json({ error: "Usuario no encontrado" });
+    return res.json({
+      id: u.id,
+      email: u.email,
+      isAdmin: u.isAdmin,
+      displayName: u.profile?.displayName || "",
+      avatarUrl: u.profile?.avatarUrl || null,
+    });
+  } catch (e) {
+    console.error("auth/me error:", e);
+    return res.status(500).json({ error: "Error obteniendo perfil" });
   }
 });
 
