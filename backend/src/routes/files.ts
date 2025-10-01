@@ -16,17 +16,16 @@ const s3 = new S3Client({
 });
 
 const BUCKET = process.env.S3_BUCKET || "marketplace";
+const PUBLIC_ENDPOINT = (process.env.S3_PUBLIC_ENDPOINT || "http://localhost:9000").replace(/\/+$/, "");
 
-/**
- * GET /api/files/presigned-get?key=<object-key>
- */
-router.get("/files/presigned-get", async (req, res) => {
+/** GET /api/files/presigned-get?key=ads/xxxx.jpg */
+router.get("/presigned-get", async (req, res) => {
   try {
     const key = req.query.key as string | undefined;
     if (!key) return res.status(400).json({ error: "key required" });
 
     const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: key });
-    const url = await getSignedUrl(s3, cmd, { expiresIn: 300 }); // 5 min en DEV
+    const url = await getSignedUrl(s3, cmd, { expiresIn: 300 });
     res.json({ url });
   } catch (err) {
     console.error("presigned-get error", err);
@@ -34,19 +33,15 @@ router.get("/files/presigned-get", async (req, res) => {
   }
 });
 
-/**
- * POST /api/files/presigned-put-batch
- * body: { files: [{ fileName, fileType }...] }
- * resp: { items: [{ fileName, fileType, key, uploadURL }] }
+/** POST /api/files/presigned-put-batch
+ * body: { files: [{ fileName, fileType }] }
+ * resp: { items: [{ fileName, fileType, key, uploadURL, url }] }
  */
-router.post("/files/presigned-put-batch", async (req, res) => {
+router.post("/presigned-put-batch", async (req, res) => {
   try {
     const files = (req.body?.files ?? []) as Array<{ fileName?: string; fileType?: string }>;
-    if (!Array.isArray(files) || files.length === 0) {
-      return res.status(400).json({ error: "files array required" });
-    }
+    if (!Array.isArray(files) || !files.length) return res.status(400).json({ error: "files array required" });
 
-    // Validación simple DEV (en prod, endurecer: tamaño, mime exacto)
     const isImage = (t?: string) => !!t && /^image\//i.test(t);
 
     const items = await Promise.all(
@@ -54,17 +49,11 @@ router.post("/files/presigned-put-batch", async (req, res) => {
         if (!fileName || !fileType || !isImage(fileType)) {
           throw new Error(`invalid file: ${fileName || "?"} (${fileType || "?"})`);
         }
-        const safeName = encodeURIComponent(fileName);
-        const key = `ads/${crypto.randomUUID()}-${safeName}`;
-
-        const cmd = new PutObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-          ContentType: fileType, // firma el mismo tipo que enviará el browser
-        });
-
+        const key = `ads/${crypto.randomUUID()}-${encodeURIComponent(fileName)}`;
+        const cmd = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: fileType });
         const uploadURL = await getSignedUrl(s3, cmd, { expiresIn: 60 });
-        return { fileName, fileType, key, uploadURL };
+        const url = `${PUBLIC_ENDPOINT}/${BUCKET}/${key}`; // pública (si bucket público) — si privado, la vista usará presigned GET
+        return { fileName, fileType, key, uploadURL, url };
       })
     );
 

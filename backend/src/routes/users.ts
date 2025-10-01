@@ -5,20 +5,13 @@ import { AuthRequest, authenticate } from "../middleware/auth";
 const prisma = new PrismaClient();
 const router = Router();
 
-/**
- * Convierte un slug de ubicación (provincia/ciudad) a su ID interno.
- */
-async function resolveLocationIdFromSlug(slug?: string | null) {
-  if (!slug) return undefined;
-  const l = await prisma.location.findUnique({ where: { slug } });
-  return l?.id;
+/** Helpers */
+async function getLocationBySlug(slug?: string | null) {
+  if (!slug) return null;
+  return prisma.location.findUnique({ where: { slug: String(slug) } });
 }
 
-/**
- * GET /api/users/me
- * Devuelve el usuario autenticado.
- * Headers anti-cache para evitar 304 sin body y variar por Authorization.
- */
+/** GET /api/users/me */
 router.get("/users/me", authenticate, async (req: AuthRequest, res: Response) => {
   const userId = String(req.user!.id);
 
@@ -35,10 +28,9 @@ router.get("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
           displayName: true,
           phone: true,
           avatarUrl: true,
-          about: true,
+          addressText: true,
           provinceId: true,
           cityId: true,
-          addressText: true,
         },
       },
     },
@@ -46,7 +38,6 @@ router.get("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
 
   if (!me) return res.status(404).json({ error: "Usuario no encontrado" });
 
-  // Evita respuestas 304 y asegura que el cache dependa del header Authorization
   res.set("Cache-Control", "no-store");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Authorization");
@@ -54,11 +45,7 @@ router.get("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
   return res.json(me);
 });
 
-/**
- * PUT /api/users/me
- * Actualiza datos del perfil del usuario autenticado (upsert del perfil).
- * Acepta slugs de provincia/ciudad y los traduce a IDs.
- */
+/** PUT /api/users/me */
 router.put("/users/me", authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const userId = String(req.user!.id);
@@ -66,7 +53,6 @@ router.put("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
       displayName,
       phone,
       avatarUrl,
-      about,
       provinceSlug,
       citySlug,
       addressText,
@@ -74,41 +60,45 @@ router.put("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
       displayName?: string;
       phone?: string;
       avatarUrl?: string;
-      about?: string;
       provinceSlug?: string | null;
       citySlug?: string | null;
       addressText?: string;
     };
 
-    const provinceId = await resolveLocationIdFromSlug(provinceSlug);
-    const cityId = await resolveLocationIdFromSlug(citySlug);
+    // Resolver provincia/ciudad por slug (si vinieron)
+    const province = await getLocationBySlug(provinceSlug);
+    const city = await getLocationBySlug(citySlug);
 
-    const updated = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        profile: {
-          upsert: {
-            create: {
-              displayName: displayName ?? "Usuario",
-              phone,
-              avatarUrl,
-              about,
-              provinceId: provinceId ?? undefined,
-              cityId: cityId ?? undefined,
-              addressText,
-            },
-            update: {
-              ...(displayName !== undefined && { displayName }),
-              ...(phone !== undefined && { phone }),
-              ...(avatarUrl !== undefined && { avatarUrl }),
-              ...(about !== undefined && { about }),
-              ...(provinceSlug !== undefined && { provinceId: provinceId ?? null }),
-              ...(citySlug !== undefined && { cityId: cityId ?? null }),
-              ...(addressText !== undefined && { addressText }),
-            },
-          },
-        },
+    // Validar consistencia: si vienen ambas, la ciudad debe pertenecer a esa provincia
+    if (city && province && city.parentId && city.parentId !== province.id) {
+      return res.status(400).json({ error: "La ciudad no pertenece a la provincia seleccionada" });
+    }
+
+    // Upsert directo sobre UserProfile por userId (evita tipos de nested upsert)
+    await prisma.userProfile.upsert({
+      where: { userId }, // ⬅️ userId debe ser único en el modelo UserProfile
+      create: {
+        userId,
+        displayName: displayName ?? "Usuario",
+        phone: phone ?? undefined,
+        avatarUrl: avatarUrl ?? undefined,
+        addressText: addressText ?? undefined,
+        provinceId: province ? province.id : undefined,
+        cityId: city ? city.id : undefined,
       },
+      update: {
+        ...(displayName !== undefined && { displayName }),
+        ...(phone !== undefined && { phone }),
+        ...(avatarUrl !== undefined && { avatarUrl }),
+        ...(addressText !== undefined && { addressText }),
+        ...(provinceSlug !== undefined && { provinceId: province ? province.id : null }),
+        ...(citySlug !== undefined && { cityId: city ? city.id : null }),
+      },
+    });
+
+    // Devolvemos el usuario actualizado
+    const me = await prisma.user.findUnique({
+      where: { id: userId },
       select: {
         id: true,
         email: true,
@@ -117,31 +107,26 @@ router.put("/users/me", authenticate, async (req: AuthRequest, res: Response) =>
             displayName: true,
             phone: true,
             avatarUrl: true,
-            about: true,
+            addressText: true,
             provinceId: true,
             cityId: true,
-            addressText: true,
           },
         },
       },
     });
 
-    // Anti-cache en la respuesta de actualización también
     res.set("Cache-Control", "no-store");
     res.set("Pragma", "no-cache");
     res.set("Vary", "Authorization");
 
-    return res.json(updated);
+    return res.json(me);
   } catch (err) {
     console.error("update me error:", err);
     return res.status(500).json({ error: "Error actualizando perfil" });
   }
 });
 
-/**
- * GET /api/users/me/listings
- * Paginado de publicaciones del usuario autenticado.
- */
+/** GET /api/users/me/listings */
 router.get("/users/me/listings", authenticate, async (req: AuthRequest, res: Response) => {
   const userId = String(req.user!.id);
   const page = Math.max(1, Number(req.query.page || 1));
@@ -163,7 +148,6 @@ router.get("/users/me/listings", authenticate, async (req: AuthRequest, res: Res
     }),
   ]);
 
-  // Anti-cache en listados del usuario
   res.set("Cache-Control", "no-store");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Authorization");

@@ -1,367 +1,438 @@
-// backend/src/routes/ads.ts
-import { Router, Request, Response } from "express";
-import {
-  PrismaClient,
-  Prisma,
-  ListingStatus,
-  Condition,
-} from "@prisma/client";
-import { authenticate, AuthRequest } from "../middleware/auth";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Router, Response, Request } from "express";
+import { PrismaClient, ListingStatus, Condition } from "@prisma/client";
+import { AuthRequest, authenticate } from "../middleware/auth";
+import { viewUrl } from "../lib/mediaUrl";
 
 const prisma = new PrismaClient();
 const router = Router();
 
-// ---------- S3 presign client (opcional) ----------
-const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT,
-  region: process.env.S3_REGION || "us-east-1",
-  forcePathStyle: true,
-  credentials: process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY
-    ? {
-        accessKeyId: process.env.S3_ACCESS_KEY!,
-        secretAccessKey: process.env.S3_SECRET_KEY!,
-      }
-    : undefined,
-});
+// Estados que el vendedor puede elegir desde el editor
+const SELLER_ALLOWED_STATUSES: ListingStatus[] = [
+  ListingStatus.active,
+  ListingStatus.paused,
+  ListingStatus.draft,
+  ListingStatus.sold_out,
+];
 
-// ---------- helpers ----------
-const asNum = (v: any) =>
-  v === undefined || v === null || v === "" ? undefined : Number(v);
-const asStr = (v: any) =>
-  typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
-
-function toDecimal2(n?: number) {
-  if (typeof n !== "number" || Number.isNaN(n)) return undefined;
-  return new Prisma.Decimal(n.toFixed(2));
-}
-
-async function resolveCategoryIdFromSlug(slug?: string | null) {
+// Helpers
+async function findCategoryIdBySlug(slug?: string | null) {
   if (!slug) return undefined;
-  const c = await prisma.category.findUnique({ where: { slug } });
+  const c = await prisma.category.findUnique({ where: { slug: String(slug) } });
   return c?.id;
 }
-async function resolveLocationIdFromSlug(slug?: string | null) {
+async function findLocationIdBySlug(slug?: string | null) {
   if (!slug) return undefined;
-  const l = await prisma.location.findUnique({ where: { slug } });
+  const l = await prisma.location.findUnique({ where: { slug: String(slug) } });
   return l?.id;
 }
-
-// ==================================================
-// CREATE  (POST /api/ads)
-// ==================================================
-router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    // Aseguramos string (UUID) aunque el middleware envíe number
-    const sellerId = String(req.user!.id);
-
-    const {
-      title,
-      description,
-      price, // number
-      currency, // string, default ARS
-      condition, // "new" | "used"
-      categorySlug, // padre
-      subcategorySlug, // hijo (si viene, tiene prioridad)
-      provinceSlug,
-      citySlug,
-      imageUrls, // string[]
-    } = req.body as any;
-
-    const categoryId =
-      (await resolveCategoryIdFromSlug(subcategorySlug)) ||
-      (await resolveCategoryIdFromSlug(categorySlug));
-    if (!categoryId) {
-      return res.status(400).json({ error: "Categoría no encontrada" });
-    }
-
-    const provinceId = await resolveLocationIdFromSlug(provinceSlug);
-    const cityId = await resolveLocationIdFromSlug(citySlug);
-
-    const created = await prisma.listing.create({
-      data: {
-        sellerId,
-        categoryId,
-        title: String(title ?? "").trim(),
-        description: asStr(description),
-        priceAmount: toDecimal2(asNum(price)) ?? new Prisma.Decimal(0),
-        currency: asStr(currency) ?? "ARS",
-        condition:
-          (condition === "new" || condition === "used"
-            ? condition
-            : "used") as Condition,
-        quantity: 1,
-        status: ListingStatus.pending,
-        provinceId,
-        cityId,
-        media:
-          Array.isArray(imageUrls) && imageUrls.length
-            ? {
-                create: imageUrls.slice(0, 12).map((url: string, i: number) => ({
-                  url,
-                  position: i,
-                })),
-              }
-            : undefined,
-      },
-      include: {
-        media: true,
-        category: { select: { id: true, name: true, slug: true, parentId: true } },
-      },
-    });
-
-    return res.status(201).json(created);
-  } catch (err) {
-    console.error("Create listing error:", err);
-    return res.status(500).json({ error: "Error al crear el aviso" });
+function buildCategoryPath(cat: any): string[] {
+  if (!cat) return [];
+  const chain = [cat];
+  if (cat.parent) chain.unshift(cat.parent);
+  if (cat.parent?.parent) chain.unshift(cat.parent.parent);
+  return chain.map((c) => c.slug).filter(Boolean);
+}
+async function descendantsIdsForCategorySlug(slug: string): Promise<string[]> {
+  const cat = await prisma.category.findUnique({
+    where: { slug },
+    include: { children: { include: { children: true } } },
+  });
+  if (!cat) return [];
+  const ids = new Set<string>();
+  ids.add(cat.id);
+  for (const c1 of cat.children) {
+    ids.add(c1.id);
+    for (const c2 of c1.children) ids.add(c2.id);
   }
-});
+  return Array.from(ids);
+}
 
-// ==================================================
-// LIST  (GET /api/ads)
-// ==================================================
+/* ============================================================
+   PUBLIC: LISTADO PAGINADO
+   GET /api/ads?page=1&pageSize=12
+   filtros opcionales: q, categorySlug, subCategorySlug, provinceSlug
+   ============================================================ */
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const q = asStr(req.query.q);
-    const minPrice = asNum(req.query.minPrice);
-    const maxPrice = asNum(req.query.maxPrice);
-    const categorySlug = asStr(req.query.category);
-    const subcategorySlug = asStr(req.query.subcategory);
-    const provinceSlug = asStr(req.query.province);
-    const citySlug = asStr(req.query.city);
-    const status = asStr(req.query.status) as ListingStatus | undefined; // optional filter
+    const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(60, Math.max(1, parseInt(String(req.query.pageSize || "12"), 10) || 12));
 
-    const page = Math.max(1, Number(req.query.page || 1));
-    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize || 12)));
+    const q = String(req.query.q || "").trim();
+    const categorySlug = req.query.categorySlug ? String(req.query.categorySlug) : "";
+    const subCategorySlug = (req.query.subCategorySlug || req.query.subcategorySlug) ? String(req.query.subCategorySlug || req.query.subcategorySlug) : "";
+    const provinceSlug = req.query.provinceSlug ? String(req.query.provinceSlug) : "";
 
-    const sort = String(req.query.sort || "published_desc");
-    let orderBy: Prisma.ListingOrderByWithRelationInput = { publishedAt: "desc" };
-    if (sort === "price_asc") orderBy = { priceAmount: "asc" };
-    else if (sort === "price_desc") orderBy = { priceAmount: "desc" };
-    else if (sort === "created_desc") orderBy = { createdAt: "desc" };
+    // Filtros base
+    const where: any = {
+      status: ListingStatus.active,
+      deletedAt: null,
+    };
 
-    const whereAND: Prisma.ListingWhereInput[] = [];
-    // Por defecto, mostramos solo activos si no se pasó status
-    if (!status) whereAND.push({ status: ListingStatus.active });
+    if (q) where.title = { contains: q, mode: "insensitive" };
 
-    if (status) whereAND.push({ status });
-
-    if (q) {
-      whereAND.push({
-        OR: [
-          { title: { contains: q, mode: "insensitive" } },
-          { description: { contains: q, mode: "insensitive" } },
-        ],
-      });
+    // Filtro por subcategoría directa (más específico)
+    if (subCategorySlug) {
+      const subId = await findCategoryIdBySlug(subCategorySlug);
+      if (subId) where.categoryId = subId;
+      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
+    } else if (categorySlug) {
+      // Filtro por categoría incluyendo descendientes
+      const ids = await descendantsIdsForCategorySlug(categorySlug);
+      if (ids.length) where.categoryId = { in: ids };
+      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
     }
-    if (typeof minPrice === "number")
-      whereAND.push({ priceAmount: { gte: toDecimal2(minPrice) } });
-    if (typeof maxPrice === "number")
-      whereAND.push({ priceAmount: { lte: toDecimal2(maxPrice) } });
 
-    let filterCategoryId: string | undefined;
-    if (subcategorySlug)
-      filterCategoryId = await resolveCategoryIdFromSlug(subcategorySlug);
-    else if (categorySlug)
-      filterCategoryId = await resolveCategoryIdFromSlug(categorySlug);
-    if (filterCategoryId) whereAND.push({ categoryId: filterCategoryId });
+    // Filtro ubicación (provincia)
+    if (provinceSlug) {
+      const pid = await findLocationIdBySlug(provinceSlug);
+      if (pid) where.provinceId = pid;
+      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
+    }
 
-    const provinceId = await resolveLocationIdFromSlug(provinceSlug || undefined);
-    if (provinceId) whereAND.push({ provinceId });
-    const cityId = await resolveLocationIdFromSlug(citySlug || undefined);
-    if (cityId) whereAND.push({ cityId });
-
-    const where: Prisma.ListingWhereInput =
-      whereAND.length ? { AND: whereAND } : {};
-
-    const [total, items] = await Promise.all([
+    const [total, rows] = await Promise.all([
       prisma.listing.count({ where }),
       prisma.listing.findMany({
         where,
-        orderBy,
+        orderBy: [{ promotedUntil: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: {
-          media: { orderBy: { position: "asc" } },
-          category: { select: { id: true, name: true, slug: true, parentId: true } },
-          seller: { select: { id: true, email: true } },
+        select: {
+          id: true,
+          title: true,
+          priceAmount: true,
+          currency: true,
+          createdAt: true,
+          category: { select: { name: true } },
+          media: { orderBy: { position: "asc" }, take: 1, select: { url: true } },
         },
       }),
     ]);
 
-    return res.json({ items, total, page, pageSize });
-  } catch (err) {
-    console.error("List listings error:", err);
+    const items = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        title: r.title,
+        price: r.priceAmount,
+        currency: r.currency,
+        categoryName: r.category?.name ?? "-",
+        coverUrl: await viewUrl(r.media[0]?.url ?? null),
+        createdAt: r.createdAt,
+      }))
+    );
+
+    return res.json({
+      items,
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    });
+  } catch (e) {
+    console.error("GET /api/ads error:", e);
     return res.status(500).json({ error: "Error listando avisos" });
   }
 });
 
-// ==================================================
-// STATS  (GET /api/ads/stats/basic)
-// ==================================================
-router.get("/stats/basic", async (_req, res) => {
-  try {
-    const [min, max, total] = await Promise.all([
-      prisma.listing.aggregate({
-        _min: { priceAmount: true },
-        where: { status: ListingStatus.active },
-      }),
-      prisma.listing.aggregate({
-        _max: { priceAmount: true },
-        where: { status: ListingStatus.active },
-      }),
-      prisma.listing.count({ where: { status: ListingStatus.active } }),
-    ]);
-    res.json({
-      minPrice: min._min.priceAmount ?? new Prisma.Decimal(0),
-      maxPrice: max._max.priceAmount ?? new Prisma.Decimal(0),
-      total,
-    });
-  } catch (err) {
-    console.error("Stats error:", err);
-    res.status(500).json({ error: "Error obteniendo stats" });
-  }
-});
-
-// ==================================================
-// PRESIGNED (GET /api/ads/presigned-url)
-// ==================================================
-router.get("/presigned-url", authenticate, async (req: AuthRequest, res) => {
-  try {
-    if (!process.env.S3_BUCKET) {
-      return res.status(400).json({ error: "S3_BUCKET no configurado" });
-    }
-    const { fileName, fileType } = req.query as any;
-    if (!fileName || !fileType)
-      return res.status(400).json({ error: "Parámetros inválidos" });
-    const key = `uploads/${Date.now()}_${encodeURIComponent(String(fileName))}`;
-    const command = new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET!,
-      Key: key,
-      ContentType: String(fileType),
-    });
-    const uploadURL = await getSignedUrl(s3, command, { expiresIn: 60 });
-    res.json({ uploadURL, key });
-  } catch (err: any) {
-    console.error("Presigned error:", err);
-    res
-      .status(500)
-      .json({ error: err.message || "Error generando presigned URL" });
-  }
-});
-
-// ==================================================
-// DETAIL  (GET /api/ads/:id)
-// ==================================================
-router.get("/:id", async (req, res) => {
-  try {
-    const id = String(req.params.id); // UUID
-    const listing = await prisma.listing.findUnique({
-      where: { id },
-      include: {
-        media: { orderBy: { position: "asc" } },
-        category: { select: { id: true, name: true, slug: true, parentId: true } },
-        seller: { select: { id: true, email: true } },
-      },
-    });
-    if (!listing) return res.status(404).json({ error: "Aviso no encontrado" });
-    res.json(listing);
-  } catch (err) {
-    console.error("Get listing error:", err);
-    res.status(500).json({ error: "Error obteniendo aviso" });
-  }
-});
-
-// ==================================================
-// UPDATE  (PUT /api/ads/:id)
-// ==================================================
-router.put("/:id", authenticate, async (req: AuthRequest, res) => {
+/* ============================================================
+   PUBLIC: DETALLE
+   GET /api/ads/public/:id
+   ============================================================ */
+router.get("/public/:id", async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
-    const me = String(req.user!.id);
+    const listing = await prisma.listing.findFirst({
+      where: { id, status: ListingStatus.active, deletedAt: null },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        priceAmount: true,
+        currency: true,
+        condition: true,
+        status: true,
+        category: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            parent: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true } } } },
+          },
+        },
+        provinceId: true,
+        cityId: true,
+        media: { orderBy: { position: "asc" }, select: { id: true, url: true, position: true } },
+        createdAt: true,
+        publishedAt: true,
+      },
+    });
+    if (!listing) return res.status(404).json({ error: "No encontrado" });
 
-    const current = await prisma.listing.findUnique({ where: { id } });
-    if (!current) return res.status(404).json({ error: "Aviso no encontrado" });
-    if (current.sellerId !== me) return res.status(403).json({ error: "No autorizado" });
+    const media = await Promise.all(
+      listing.media.map(async (m) => ({ id: m.id, position: m.position, url: await viewUrl(m.url) }))
+    );
+    const categoryPath = buildCategoryPath(listing.category);
 
+    return res.json({
+      id: listing.id,
+      title: listing.title,
+      description: listing.description,
+      price: listing.priceAmount,
+      currency: listing.currency,
+      condition: listing.condition,
+      status: listing.status,
+      categorySlug: listing.category.slug,
+      categoryPath,
+      media,
+      createdAt: listing.createdAt,
+      publishedAt: listing.publishedAt,
+    });
+  } catch (e) {
+    console.error("GET /api/ads/public/:id error:", e);
+    return res.status(500).json({ error: "Error obteniendo aviso" });
+  }
+});
+
+/* ============================================================
+   AUTH: CREAR (queda ACTIVE)
+   POST /api/ads
+   ============================================================ */
+router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = String(req.user!.id);
     const {
       title,
       description,
       price,
-      currency,
-      condition,
       categorySlug,
-      subcategorySlug,
       provinceSlug,
       citySlug,
-      imageUrls,
-      status, // opcional
-    } = req.body as any;
-
-    const categoryId =
-      (await resolveCategoryIdFromSlug(subcategorySlug)) ||
-      (await resolveCategoryIdFromSlug(categorySlug));
-
-    const provinceId = await resolveLocationIdFromSlug(provinceSlug);
-    const cityId = await resolveLocationIdFromSlug(citySlug);
-
-    const data: Prisma.ListingUpdateInput = {
-      ...(title !== undefined && { title: String(title).trim() }),
-      ...(description !== undefined && { description: asStr(description) ?? null }),
-      ...(price !== undefined && {
-        priceAmount: toDecimal2(asNum(price)) ?? undefined,
-      }),
-      ...(currency !== undefined && { currency: String(currency || "ARS") }),
-      ...(condition !== undefined &&
-        (condition === "new" || condition === "used") && { condition }),
-      ...(categoryId && { category: { connect: { id: categoryId } } }),
-      ...(provinceSlug !== undefined && { provinceId: provinceId ?? null }),
-      ...(citySlug !== undefined && { cityId: cityId ?? null }),
-      ...(status && { status }),
+      condition,
+      media,
+    } = req.body as {
+      title?: string;
+      description?: string;
+      price?: number;
+      categorySlug?: string;
+      provinceSlug?: string | null;
+      citySlug?: string | null;
+      condition?: "new" | "used";
+      media?: Array<{ url: string; position?: number }>;
     };
 
-    // reemplazo total de media si viene array
-    if (Array.isArray(imageUrls)) {
-      data.media = {
-        deleteMany: { listingId: id },
-        create: imageUrls.slice(0, 12).map((url: string, i: number) => ({
-          url,
-          position: i,
-        })),
-      };
+    if (!title?.trim() || !(Number(price) > 0) || !categorySlug) {
+      return res.status(400).json({ error: "title, price y categorySlug son requeridos" });
     }
 
-    const updated = await prisma.listing.update({
-      where: { id },
-      data,
-      include: { media: { orderBy: { position: "asc" } } },
+    const categoryId = await findCategoryIdBySlug(categorySlug);
+    if (!categoryId) return res.status(400).json({ error: "Categoría inválida" });
+
+    const provinceId = await findLocationIdBySlug(provinceSlug);
+    const cityId = await findLocationIdBySlug(citySlug);
+
+    if (cityId && provinceId) {
+      const city = await prisma.location.findUnique({ where: { id: cityId }, select: { parentId: true } });
+      if (city?.parentId && city.parentId !== provinceId) {
+        return res.status(400).json({ error: "La ciudad no pertenece a la provincia" });
+      }
+    }
+
+    const created = await prisma.listing.create({
+      data: {
+        title: title.trim(),
+        description: description?.trim() || "",
+        priceAmount: Number(price),
+        currency: "ARS",
+        sellerId: userId,
+        categoryId,
+        condition: condition === "used" ? "used" : "new",
+        provinceId: provinceId ?? null,
+        cityId: cityId ?? null,
+
+        status: ListingStatus.active, // Active al crear
+        publishedAt: new Date(),
+
+        media: Array.isArray(media) && media.length
+          ? {
+              createMany: {
+                data: media
+                  .filter((m) => m?.url)
+                  .map((m, i) => ({
+                    url: m.url,
+                    position: Number.isFinite(m.position) ? (m.position as number) : i,
+                  })),
+              },
+            }
+          : undefined,
+      },
+      select: { id: true },
     });
 
-    res.json(updated);
+    return res.status(201).json({ id: created.id });
   } catch (err) {
-    console.error("Update listing error:", err);
-    res.status(500).json({ error: "Error actualizando aviso" });
+    console.error("create ad error:", err);
+    return res.status(500).json({ error: "Error creando anuncio" });
   }
 });
 
-// ==================================================
-// DELETE  (DELETE /api/ads/:id)
-// ==================================================
-router.delete("/:id", authenticate, async (req: AuthRequest, res) => {
+/* ============================================================
+   AUTH: OBTENER PARA EDICIÓN
+   GET /api/ads/:id
+   ============================================================ */
+router.get("/:id", authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id);
-    const me = String(req.user!.id);
 
-    const current = await prisma.listing.findUnique({ where: { id } });
-    if (!current) return res.status(404).json({ error: "Aviso no encontrado" });
-    if (current.sellerId !== me) return res.status(403).json({ error: "No autorizado" });
+    const listing = await prisma.listing.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        priceAmount: true,
+        currency: true,
+        condition: true,
+        status: true,
+        sellerId: true,
+        category: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            parent: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true } } } },
+          },
+        },
+        provinceId: true,
+        cityId: true,
+        media: { orderBy: { position: "asc" }, select: { id: true, url: true, position: true } },
+      },
+    });
 
-    await prisma.listing.delete({ where: { id } });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Delete listing error:", err);
-    res.status(500).json({ error: "Error eliminando aviso" });
+    if (!listing) return res.status(404).json({ error: "No existe" });
+    if (String(listing.sellerId) !== String(req.user!.id) && !req.user!.isAdmin) {
+      return res.status(403).json({ error: "No autorizado" });
+    }
+
+    const [prov, city] = await Promise.all([
+      listing.provinceId ? prisma.location.findUnique({ where: { id: listing.provinceId }, select: { slug: true, name: true } }) : null,
+      listing.cityId ? prisma.location.findUnique({ where: { id: listing.cityId }, select: { slug: true, name: true } }) : null,
+    ]);
+
+    const media = await Promise.all(
+      listing.media.map(async (m) => ({
+        id: m.id,
+        position: m.position,
+        url: await viewUrl(m.url),
+      }))
+    );
+
+    const categoryPath = buildCategoryPath(listing.category);
+
+    return res.json({
+      id: listing.id,
+      title: listing.title,
+      description: listing.description,
+      price: listing.priceAmount,
+      currency: listing.currency,
+      condition: listing.condition,
+      status: listing.status,
+      categorySlug: listing.category.slug,
+      categoryPath,
+      province: prov ? { slug: prov.slug, name: prov.name } : null,
+      city: city ? { slug: city.slug, name: city.name } : null,
+      media,
+    });
+  } catch (e) {
+    console.error("GET /api/ads/:id error:", e);
+    return res.status(500).json({ error: "Error obteniendo anuncio" });
+  }
+});
+
+/* ============================================================
+   AUTH: EDITAR
+   PATCH /api/ads/:id
+   ============================================================ */
+router.patch("/:id", authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const body = req.body as {
+      title?: string;
+      description?: string;
+      price?: number;
+      condition?: "new" | "used";
+      categorySlug?: string;
+      provinceSlug?: string | null;
+      citySlug?: string | null;
+      status?: ListingStatus;
+      media?: Array<{ url: string; position?: number }>;
+    };
+
+    const existing = await prisma.listing.findUnique({ where: { id }, select: { sellerId: true } });
+    if (!existing) return res.status(404).json({ error: "No existe" });
+    if (String(existing.sellerId) !== String(req.user!.id) && !req.user!.isAdmin) {
+      return res.status(403).json({ error: "No autorizado" });
+    }
+
+    const categoryId = body.categorySlug ? await findCategoryIdBySlug(body.categorySlug) : undefined;
+    if (body.categorySlug && !categoryId) return res.status(400).json({ error: "Categoría inválida" });
+
+    const provinceId = body.hasOwnProperty("provinceSlug") ? await findLocationIdBySlug(body.provinceSlug ?? null) : undefined;
+    const cityId = body.hasOwnProperty("citySlug") ? await findLocationIdBySlug(body.citySlug ?? null) : undefined;
+
+    if (typeof cityId !== "undefined" && cityId && typeof provinceId !== "undefined" && provinceId) {
+      const city = await prisma.location.findUnique({ where: { id: cityId }, select: { parentId: true } });
+      if (city?.parentId && city.parentId !== provinceId) {
+        return res.status(400).json({ error: "La ciudad no pertenece a la provincia" });
+      }
+    }
+
+    const data: any = {};
+    if (typeof body.title !== "undefined") data.title = body.title?.trim() || "";
+    if (typeof body.description !== "undefined") data.description = body.description?.trim() || "";
+    if (typeof body.price !== "undefined") {
+      if (!(Number(body.price) > 0)) return res.status(400).json({ error: "Precio inválido" });
+      data.priceAmount = Number(body.price);
+    }
+    if (typeof body.condition !== "undefined") {
+      data.condition = body.condition === "used" ? Condition.used : Condition.new;
+    }
+    if (typeof categoryId !== "undefined") data.categoryId = categoryId;
+    if (typeof provinceId !== "undefined") data.provinceId = provinceId ?? null;
+    if (typeof cityId !== "undefined") data.cityId = cityId ?? null;
+
+    if (typeof body.status !== "undefined") {
+      const desired = body.status as ListingStatus;
+      if (!req.user!.isAdmin && !SELLER_ALLOWED_STATUSES.includes(desired)) {
+        return res.status(400).json({ error: "Cambio de estado no permitido" });
+      }
+      data.status = desired;
+      if (desired === ListingStatus.active) {
+        data.publishedAt = new Date();
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.listing.update({ where: { id }, data });
+
+      if (Array.isArray(body.media)) {
+        await tx.listingMedia.deleteMany({ where: { listingId: id } });
+        if (body.media.length) {
+          await tx.listingMedia.createMany({
+            data: body.media
+              .filter((m) => m?.url)
+              .map((m, i) => ({
+                listingId: id,
+                url: m.url,
+                position: Number.isFinite(m.position) ? (m.position as number) : i,
+              })),
+          });
+        }
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("PATCH /api/ads/:id error:", e);
+    return res.status(500).json({ error: "Error actualizando anuncio" });
   }
 });
 

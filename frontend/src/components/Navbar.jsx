@@ -1,16 +1,11 @@
 import { Link, useNavigate } from "react-router-dom";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useState } from "react";
 import { AuthContext } from "../context/AuthContext";
 
 function Navbar() {
   const navigate = useNavigate();
   const { ready, user, logout } = useContext(AuthContext);
   const [isOpen, setIsOpen] = useState(false);
-
-  useEffect(() => { /* logs opcionales
-    console.log("[Navbar] ready:", ready);
-    console.log("[Navbar] user:", user);
-  */ }, [ready, user]);
 
   const handleLogout = () => {
     logout();
@@ -47,7 +42,10 @@ function Navbar() {
               </>
             ) : (
               <>
-                <Link to="/account" className="text-sm text-gray-300 hover:text-white underline-offset-4 hover:underline">
+                <Link
+                  to="/account/overview"
+                  className="text-sm text-gray-300 hover:text-white underline-offset-4 hover:underline"
+                >
                   {displayName}
                 </Link>
                 <button onClick={handleLogout} className="bg-red-500 px-3 py-1 rounded hover:bg-red-600">
@@ -81,7 +79,7 @@ function Navbar() {
             <>
               <Link to="/ads/new" className="block hover:text-gray-300">Nuevo anuncio</Link>
               <Link to="/profile" className="block hover:text-gray-300">Mis anuncios</Link>
-              <Link to="/account" className="block hover:text-gray-300">Mi cuenta ({displayName})</Link>
+              <Link to="/account/overview" className="block hover:text-gray-300">Mi cuenta ({displayName})</Link>
             </>
           )}
           {!ready ? (

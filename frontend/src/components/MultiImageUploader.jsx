@@ -54,7 +54,7 @@ export default function MultiImageUploader({
       const withMeta = toAdd.map((f, i) => ({
         file: f,
         key: items[i]?.key || null,
-        status: "pending",
+        status: "Active",
         progress: 0,
       }));
 
