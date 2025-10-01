@@ -1,3 +1,4 @@
+// backend/src/routes/ads.ts
 import { Router, Response, Request } from "express";
 import { PrismaClient, ListingStatus, Condition } from "@prisma/client";
 import { AuthRequest, authenticate } from "../middleware/auth";
@@ -6,15 +7,10 @@ import { viewUrl } from "../lib/mediaUrl";
 const prisma = new PrismaClient();
 const router = Router();
 
-// Estados que el vendedor puede elegir desde el editor
 const SELLER_ALLOWED_STATUSES: ListingStatus[] = [
-  ListingStatus.active,
-  ListingStatus.paused,
-  ListingStatus.draft,
-  ListingStatus.sold_out,
+  ListingStatus.active, ListingStatus.paused, ListingStatus.draft, ListingStatus.sold_out,
 ];
 
-// Helpers
 async function findCategoryIdBySlug(slug?: string | null) {
   if (!slug) return undefined;
   const c = await prisma.category.findUnique({ where: { slug: String(slug) } });
@@ -38,8 +34,7 @@ async function descendantsIdsForCategorySlug(slug: string): Promise<string[]> {
     include: { children: { include: { children: true } } },
   });
   if (!cat) return [];
-  const ids = new Set<string>();
-  ids.add(cat.id);
+  const ids = new Set<string>([cat.id]);
   for (const c1 of cat.children) {
     ids.add(c1.id);
     for (const c2 of c1.children) ids.add(c2.id);
@@ -47,11 +42,41 @@ async function descendantsIdsForCategorySlug(slug: string): Promise<string[]> {
   return Array.from(ids);
 }
 
-/* ============================================================
-   PUBLIC: LISTADO PAGINADO
-   GET /api/ads?page=1&pageSize=12
-   filtros opcionales: q, categorySlug, subCategorySlug, provinceSlug
-   ============================================================ */
+// ---- atributos (defs heredadas) ----
+async function getAttrDefsMapByCategoryId(categoryId: string) {
+  const cat = await prisma.category.findUnique({
+    where: { id: categoryId },
+    select: { id: true, parent: { select: { id: true, parent: { select: { id: true } } } } },
+  });
+  if (!cat) return new Map<string, any>();
+  const ids = [cat.id];
+  if (cat.parent?.id) ids.push(cat.parent.id);
+  if (cat.parent?.parent?.id) ids.push(cat.parent.parent.id);
+
+  const defs = await prisma.listingAttributeDef.findMany({
+    where: { categoryId: { in: ids } },
+    select: { id: true, key: true, name: true, dataType: true, enumOptions: true, isRequired: true },
+  });
+  const map = new Map<string, any>();
+  for (const d of defs) map.set(d.key, d);
+  return map;
+}
+function normalizeAttributeValue(dt: string, v: any) {
+  if (v === null || typeof v === "undefined" || v === "") return { text: null, num: null, bool: null };
+  if (dt === "number") {
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new Error("Valor numérico inválido");
+    return { text: null, num: n, bool: null };
+  }
+  if (dt === "boolean") {
+    const b = typeof v === "boolean" ? v : String(v).toLowerCase() === "true";
+    return { text: null, num: null, bool: b };
+  }
+  // text | enum
+  return { text: String(v), num: null, bool: null };
+}
+
+/* ================= PUBLIC LIST ================= */
 router.get("/", async (req: Request, res: Response) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
@@ -62,31 +87,19 @@ router.get("/", async (req: Request, res: Response) => {
     const subCategorySlug = (req.query.subCategorySlug || req.query.subcategorySlug) ? String(req.query.subCategorySlug || req.query.subcategorySlug) : "";
     const provinceSlug = req.query.provinceSlug ? String(req.query.provinceSlug) : "";
 
-    // Filtros base
-    const where: any = {
-      status: ListingStatus.active,
-      deletedAt: null,
-    };
-
+    const where: any = { status: ListingStatus.active, deletedAt: null };
     if (q) where.title = { contains: q, mode: "insensitive" };
 
-    // Filtro por subcategoría directa (más específico)
     if (subCategorySlug) {
       const subId = await findCategoryIdBySlug(subCategorySlug);
-      if (subId) where.categoryId = subId;
-      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
+      if (subId) where.categoryId = subId; else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
     } else if (categorySlug) {
-      // Filtro por categoría incluyendo descendientes
       const ids = await descendantsIdsForCategorySlug(categorySlug);
-      if (ids.length) where.categoryId = { in: ids };
-      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
+      if (ids.length) where.categoryId = { in: ids }; else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
     }
-
-    // Filtro ubicación (provincia)
     if (provinceSlug) {
       const pid = await findLocationIdBySlug(provinceSlug);
-      if (pid) where.provinceId = pid;
-      else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
+      if (pid) where.provinceId = pid; else return res.json({ items: [], page, pageSize, total: 0, totalPages: 1 });
     }
 
     const [total, rows] = await Promise.all([
@@ -97,94 +110,60 @@ router.get("/", async (req: Request, res: Response) => {
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: {
-          id: true,
-          title: true,
-          priceAmount: true,
-          currency: true,
-          createdAt: true,
+          id: true, title: true, priceAmount: true, currency: true, createdAt: true,
           category: { select: { name: true } },
           media: { orderBy: { position: "asc" }, take: 1, select: { url: true } },
         },
       }),
     ]);
 
-    const items = await Promise.all(
-      rows.map(async (r) => ({
-        id: r.id,
-        title: r.title,
-        price: r.priceAmount,
-        currency: r.currency,
-        categoryName: r.category?.name ?? "-",
-        coverUrl: await viewUrl(r.media[0]?.url ?? null),
-        createdAt: r.createdAt,
-      }))
-    );
+    const items = await Promise.all(rows.map(async (r) => ({
+      id: r.id, title: r.title, price: r.priceAmount, currency: r.currency,
+      categoryName: r.category?.name ?? "-", coverUrl: await viewUrl(r.media[0]?.url ?? null),
+      createdAt: r.createdAt,
+    })));
 
-    return res.json({
-      items,
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    });
+    return res.json({ items, page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (e) {
     console.error("GET /api/ads error:", e);
     return res.status(500).json({ error: "Error listando avisos" });
   }
 });
 
-/* ============================================================
-   PUBLIC: DETALLE
-   GET /api/ads/public/:id
-   ============================================================ */
+/* ================ PUBLIC DETAIL ================= */
 router.get("/public/:id", async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
     const listing = await prisma.listing.findFirst({
       where: { id, status: ListingStatus.active, deletedAt: null },
       select: {
-        id: true,
-        title: true,
-        description: true,
-        priceAmount: true,
-        currency: true,
-        condition: true,
-        status: true,
-        category: {
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            parent: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true } } } },
-          },
-        },
-        provinceId: true,
-        cityId: true,
+        id: true, title: true, description: true, priceAmount: true, currency: true, condition: true, status: true,
+        category: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true } } } } } },
+        provinceId: true, cityId: true,
         media: { orderBy: { position: "asc" }, select: { id: true, url: true, position: true } },
-        createdAt: true,
-        publishedAt: true,
+        createdAt: true, publishedAt: true,
+        attributes: { select: { valueText: true, valueNumber: true, valueBool: true, attrDef: { select: { key: true, name: true, dataType: true } } } },
       },
     });
     if (!listing) return res.status(404).json({ error: "No encontrado" });
 
-    const media = await Promise.all(
-      listing.media.map(async (m) => ({ id: m.id, position: m.position, url: await viewUrl(m.url) }))
-    );
+    const media = await Promise.all(listing.media.map(async (m) => ({ id: m.id, position: m.position, url: await viewUrl(m.url) })));
     const categoryPath = buildCategoryPath(listing.category);
 
+    const attrs: Record<string, any> = {};
+    listing.attributes.forEach((a) => {
+      const k = a.attrDef.key;
+      const dt = a.attrDef.dataType;
+      attrs[k] = dt === "number" ? a.valueNumber :
+                 dt === "boolean" ? a.valueBool :
+                 a.valueText;
+    });
+
     return res.json({
-      id: listing.id,
-      title: listing.title,
-      description: listing.description,
-      price: listing.priceAmount,
-      currency: listing.currency,
-      condition: listing.condition,
-      status: listing.status,
-      categorySlug: listing.category.slug,
-      categoryPath,
-      media,
-      createdAt: listing.createdAt,
-      publishedAt: listing.publishedAt,
+      id: listing.id, title: listing.title, description: listing.description,
+      price: listing.priceAmount, currency: listing.currency, condition: listing.condition,
+      status: listing.status, categorySlug: listing.category.slug, categoryPath,
+      media, attributes: attrs, createdAt: listing.createdAt, publishedAt: listing.publishedAt,
     });
   } catch (e) {
     console.error("GET /api/ads/public/:id error:", e);
@@ -192,31 +171,19 @@ router.get("/public/:id", async (req: Request, res: Response) => {
   }
 });
 
-/* ============================================================
-   AUTH: CREAR (queda ACTIVE)
-   POST /api/ads
-   ============================================================ */
+/* ================== CREATE ================== */
 router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const userId = String(req.user!.id);
     const {
-      title,
-      description,
-      price,
-      categorySlug,
-      provinceSlug,
-      citySlug,
-      condition,
-      media,
+      title, description, price, categorySlug, provinceSlug, citySlug, condition,
+      media, attributes,
     } = req.body as {
-      title?: string;
-      description?: string;
-      price?: number;
-      categorySlug?: string;
-      provinceSlug?: string | null;
-      citySlug?: string | null;
+      title?: string; description?: string; price?: number;
+      categorySlug?: string; provinceSlug?: string | null; citySlug?: string | null;
       condition?: "new" | "used";
       media?: Array<{ url: string; position?: number }>;
+      attributes?: Array<{ key: string; value: any }>;
     };
 
     if (!title?.trim() || !(Number(price) > 0) || !categorySlug) {
@@ -228,13 +195,26 @@ router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
 
     const provinceId = await findLocationIdBySlug(provinceSlug);
     const cityId = await findLocationIdBySlug(citySlug);
-
     if (cityId && provinceId) {
       const city = await prisma.location.findUnique({ where: { id: cityId }, select: { parentId: true } });
-      if (city?.parentId && city.parentId !== provinceId) {
-        return res.status(400).json({ error: "La ciudad no pertenece a la provincia" });
-      }
+      if (city?.parentId && city.parentId !== provinceId) return res.status(400).json({ error: "La ciudad no pertenece a la provincia" });
     }
+
+    // attrs map (heredados)
+    const defMap = await getAttrDefsMapByCategoryId(categoryId);
+    const attrsInput = Array.isArray(attributes) ? attributes : [];
+    const toCreateAttrs = attrsInput
+      .filter((a) => a && defMap.has(a.key))
+      .map((a) => {
+        const def = defMap.get(a.key);
+        const norm = normalizeAttributeValue(def.dataType, a.value);
+        return {
+          attrDefId: def.id,
+          valueText: norm.text,
+          valueNumber: norm.num as any,
+          valueBool: norm.bool as any,
+        };
+      });
 
     const created = await prisma.listing.create({
       data: {
@@ -247,22 +227,12 @@ router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
         condition: condition === "used" ? "used" : "new",
         provinceId: provinceId ?? null,
         cityId: cityId ?? null,
-
-        status: ListingStatus.active, // Active al crear
+        status: ListingStatus.active,
         publishedAt: new Date(),
-
-        media: Array.isArray(media) && media.length
-          ? {
-              createMany: {
-                data: media
-                  .filter((m) => m?.url)
-                  .map((m, i) => ({
-                    url: m.url,
-                    position: Number.isFinite(m.position) ? (m.position as number) : i,
-                  })),
-              },
-            }
-          : undefined,
+        media: Array.isArray(media) && media.length ? {
+          createMany: { data: media.filter((m) => m?.url).map((m, i) => ({ url: m.url, position: Number.isFinite(m.position) ? (m.position as number) : i })) },
+        } : undefined,
+        attributes: toCreateAttrs.length ? { createMany: { data: toCreateAttrs } } : undefined,
       },
       select: { id: true },
     });
@@ -274,166 +244,4 @@ router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-/* ============================================================
-   AUTH: OBTENER PARA EDICIÓN
-   GET /api/ads/:id
-   ============================================================ */
-router.get("/:id", authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = String(req.params.id);
 
-    const listing = await prisma.listing.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        priceAmount: true,
-        currency: true,
-        condition: true,
-        status: true,
-        sellerId: true,
-        category: {
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            parent: { select: { id: true, slug: true, name: true, parent: { select: { id: true, slug: true, name: true } } } },
-          },
-        },
-        provinceId: true,
-        cityId: true,
-        media: { orderBy: { position: "asc" }, select: { id: true, url: true, position: true } },
-      },
-    });
-
-    if (!listing) return res.status(404).json({ error: "No existe" });
-    if (String(listing.sellerId) !== String(req.user!.id) && !req.user!.isAdmin) {
-      return res.status(403).json({ error: "No autorizado" });
-    }
-
-    const [prov, city] = await Promise.all([
-      listing.provinceId ? prisma.location.findUnique({ where: { id: listing.provinceId }, select: { slug: true, name: true } }) : null,
-      listing.cityId ? prisma.location.findUnique({ where: { id: listing.cityId }, select: { slug: true, name: true } }) : null,
-    ]);
-
-    const media = await Promise.all(
-      listing.media.map(async (m) => ({
-        id: m.id,
-        position: m.position,
-        url: await viewUrl(m.url),
-      }))
-    );
-
-    const categoryPath = buildCategoryPath(listing.category);
-
-    return res.json({
-      id: listing.id,
-      title: listing.title,
-      description: listing.description,
-      price: listing.priceAmount,
-      currency: listing.currency,
-      condition: listing.condition,
-      status: listing.status,
-      categorySlug: listing.category.slug,
-      categoryPath,
-      province: prov ? { slug: prov.slug, name: prov.name } : null,
-      city: city ? { slug: city.slug, name: city.name } : null,
-      media,
-    });
-  } catch (e) {
-    console.error("GET /api/ads/:id error:", e);
-    return res.status(500).json({ error: "Error obteniendo anuncio" });
-  }
-});
-
-/* ============================================================
-   AUTH: EDITAR
-   PATCH /api/ads/:id
-   ============================================================ */
-router.patch("/:id", authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = String(req.params.id);
-    const body = req.body as {
-      title?: string;
-      description?: string;
-      price?: number;
-      condition?: "new" | "used";
-      categorySlug?: string;
-      provinceSlug?: string | null;
-      citySlug?: string | null;
-      status?: ListingStatus;
-      media?: Array<{ url: string; position?: number }>;
-    };
-
-    const existing = await prisma.listing.findUnique({ where: { id }, select: { sellerId: true } });
-    if (!existing) return res.status(404).json({ error: "No existe" });
-    if (String(existing.sellerId) !== String(req.user!.id) && !req.user!.isAdmin) {
-      return res.status(403).json({ error: "No autorizado" });
-    }
-
-    const categoryId = body.categorySlug ? await findCategoryIdBySlug(body.categorySlug) : undefined;
-    if (body.categorySlug && !categoryId) return res.status(400).json({ error: "Categoría inválida" });
-
-    const provinceId = body.hasOwnProperty("provinceSlug") ? await findLocationIdBySlug(body.provinceSlug ?? null) : undefined;
-    const cityId = body.hasOwnProperty("citySlug") ? await findLocationIdBySlug(body.citySlug ?? null) : undefined;
-
-    if (typeof cityId !== "undefined" && cityId && typeof provinceId !== "undefined" && provinceId) {
-      const city = await prisma.location.findUnique({ where: { id: cityId }, select: { parentId: true } });
-      if (city?.parentId && city.parentId !== provinceId) {
-        return res.status(400).json({ error: "La ciudad no pertenece a la provincia" });
-      }
-    }
-
-    const data: any = {};
-    if (typeof body.title !== "undefined") data.title = body.title?.trim() || "";
-    if (typeof body.description !== "undefined") data.description = body.description?.trim() || "";
-    if (typeof body.price !== "undefined") {
-      if (!(Number(body.price) > 0)) return res.status(400).json({ error: "Precio inválido" });
-      data.priceAmount = Number(body.price);
-    }
-    if (typeof body.condition !== "undefined") {
-      data.condition = body.condition === "used" ? Condition.used : Condition.new;
-    }
-    if (typeof categoryId !== "undefined") data.categoryId = categoryId;
-    if (typeof provinceId !== "undefined") data.provinceId = provinceId ?? null;
-    if (typeof cityId !== "undefined") data.cityId = cityId ?? null;
-
-    if (typeof body.status !== "undefined") {
-      const desired = body.status as ListingStatus;
-      if (!req.user!.isAdmin && !SELLER_ALLOWED_STATUSES.includes(desired)) {
-        return res.status(400).json({ error: "Cambio de estado no permitido" });
-      }
-      data.status = desired;
-      if (desired === ListingStatus.active) {
-        data.publishedAt = new Date();
-      }
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.listing.update({ where: { id }, data });
-
-      if (Array.isArray(body.media)) {
-        await tx.listingMedia.deleteMany({ where: { listingId: id } });
-        if (body.media.length) {
-          await tx.listingMedia.createMany({
-            data: body.media
-              .filter((m) => m?.url)
-              .map((m, i) => ({
-                listingId: id,
-                url: m.url,
-                position: Number.isFinite(m.position) ? (m.position as number) : i,
-              })),
-          });
-        }
-      }
-    });
-
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("PATCH /api/ads/:id error:", e);
-    return res.status(500).json({ error: "Error actualizando anuncio" });
-  }
-});
-
-export default router;
