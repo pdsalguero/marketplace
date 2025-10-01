@@ -244,4 +244,5 @@ router.post("/", authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
+export default router
 

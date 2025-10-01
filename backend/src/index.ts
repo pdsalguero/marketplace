@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 
 import authRoutes from "./routes/auth";
-import adsRoutes from "./routes/ads";
+import adsRoute from "./routes/ads";
 import userRoutes from "./routes/users";
 import presignRoutes from "./routes/presign";
 import filesRoutes from "./routes/files";

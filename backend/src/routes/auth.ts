@@ -6,10 +6,7 @@ import { authenticate, signToken, AuthRequest } from "../middleware/auth";
 const prisma = new PrismaClient();
 const router = Router();
 
-/**
- * POST /api/auth/register
- * body: { email, password, displayName? }
- */
+/** POST /api/auth/register */
 router.post("/register", async (req: Request, res: Response) => {
   try {
     const { email, password, displayName } = req.body || {};
@@ -23,7 +20,7 @@ router.post("/register", async (req: Request, res: Response) => {
       data: {
         email,
         passwordHash,
-        profile: displayName ? { create: { displayName } } : { create: { displayName: email.split("@")[0] } },
+        profile: { create: { displayName: displayName || email.split("@")[0] } },
       },
       select: { id: true, email: true, isAdmin: true, profile: { select: { displayName: true, avatarUrl: true } } },
     });
@@ -45,10 +42,7 @@ router.post("/register", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/auth/login
- * body: { email, password }
- */
+/** POST /api/auth/login */
 router.post("/login", async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body || {};
@@ -63,7 +57,6 @@ router.post("/login", async (req: Request, res: Response) => {
     const ok = await bcrypt.compare(String(password), user.passwordHash);
     if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
 
-    // (opcional) bloquear si status = banned
     if (String(user.status) === "banned") return res.status(403).json({ error: "Usuario bloqueado" });
 
     const token = signToken({ id: user.id, email: user.email, isAdmin: user.isAdmin });
@@ -83,9 +76,7 @@ router.post("/login", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/auth/me (protegido)
- */
+/** GET /api/auth/me */
 router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const u = await prisma.user.findUnique({
